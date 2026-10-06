@@ -19,7 +19,12 @@ apk add --no-cache build-base linux-headers kmod mkinitfs
 echo "=== [2/7] atum derleniyor (musl, statik)"
 rm -rf /tmp/atum && mkdir /tmp/atum
 cp -a /work/package /work/src /tmp/atum/
-( cd /tmp/atum && package/compile && package/check )
+# zip/git yuzunden kaybolan calistirma izinlerini geri ver
+chmod +x /tmp/atum/package/* 2>/dev/null || true
+for f in /tmp/atum/src/*; do
+  case $f in *.c|*.h|*.h1|*.h2|*.dist|*.o|*.a|*.lib|Makefile|TARGETS|conf-*) ;; *) chmod +x "$f" ;; esac
+done
+( cd /tmp/atum && sh package/compile && sh package/check )
 for b in $(cat /tmp/atum/package/commands); do
   [ -x "/tmp/atum/command/$b" ] || { echo "eksik ikili: $b" >&2; exit 1; }
 done
@@ -82,6 +87,8 @@ for t in modprobe depmod insmod lsmod rmmod modinfo; do
 done
 
 cp -a /work/image/overlay/. "$ROOT/"
+chmod 755 "$ROOT"/etc/atum/1 "$ROOT"/etc/atum/2 "$ROOT"/etc/atum/3 "$ROOT"/etc/atum/ctrlaltdel \
+  "$ROOT"/usr/libexec/atum-* "$ROOT"/usr/share/udhcpc/atum.script "$ROOT"/usr/sbin/wifi-connect
 echo "$HOSTNAME_" > "$ROOT/etc/hostname"
 printf '127.0.0.1\tlocalhost %s\n::1\t\tlocalhost\n' "$HOSTNAME_" > "$ROOT/etc/hosts"
 mkdir -p "$ROOT/service" "$ROOT/etc/atum" "$ROOT/run" "$ROOT/tmp" "$ROOT/var/log" "$ROOT/root" "$ROOT/boot"
