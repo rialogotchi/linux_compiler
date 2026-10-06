@@ -117,28 +117,34 @@ jobs:
 
           cat > "$R/etc/atum/1" <<'EOF'
           #!/bin/sh
-          # stage 1: tek seferlik hazirlik
+          # stage 1: tek seferlik sistem hazirligi (boot log)
           export PATH=/sbin:/bin:/usr/sbin:/usr/bin
-          mount -t proc proc /proc
-          mount -t sysfs sysfs /sys
-          mount -t devtmpfs devtmpfs /dev 2>/dev/null
+          step() { printf ' * %-42s' "$1"; shift; if "$@" >/dev/null 2>&1; then echo '[ ok ]'; else echo '[fail]'; fi; }
+          echo
+          echo "Alpine Linux $(cat /etc/alpine-release) - atum init - kernel $(uname -r)"
+          echo
+          step "Mounting /proc"        mount -t proc proc /proc
+          step "Mounting /sys"         mount -t sysfs sysfs /sys
+          step "Mounting /dev"         mount -t devtmpfs devtmpfs /dev
           mkdir -p /dev/pts /dev/shm
-          mount -t devpts devpts /dev/pts
-          mount -t tmpfs -o mode=1777 tmpfs /dev/shm
-          mount -t tmpfs -o mode=0755 tmpfs /run
-          hostname atum
-          ip link set lo up
+          step "Mounting /dev/pts"     mount -t devpts devpts /dev/pts
+          step "Mounting /dev/shm"     mount -t tmpfs -o mode=1777 tmpfs /dev/shm
+          step "Mounting /run"         mount -t tmpfs -o mode=0755 tmpfs /run
+          mkdir -p /run/lock /var/log
+          step "Setting hostname"      hostname "$(cat /etc/hostname)"
+          step "Bringing up loopback"  ip link set lo up
           for m in virtio_pci virtio_net virtio_rng virtio_blk af_packet 9pnet_virtio 9p; do
-            modprobe "$m" 2>/dev/null
+            step "Loading module $m" modprobe "$m"
           done
+          step "Syncing clock from RTC" hwclock -s -u
           echo "nameserver 10.0.2.3" > /etc/resolv.conf
-          hwclock -s -u 2>/dev/null
           touch /etc/atum/stopit
           chmod 0 /etc/atum/stopit
+          echo
           exit 0
           EOF
 
-          cp "$SRC/etc/sysv/2" "$R/etc/atum/2"
+          sed '/^PATH=/a for s in /service/*; do echo " * Starting service: ${s##*/}"; done' "$SRC/etc/sysv/2" > "$R/etc/atum/2"
 
           cat > "$R/etc/atum/3" <<'EOF'
           #!/bin/sh
@@ -191,6 +197,7 @@ jobs:
           TTY="$(awk '{print $NF}' /sys/class/tty/console/active 2>/dev/null)"
           [ -n "$TTY" ] || TTY=ttyS0
           exec 0<"/dev/$TTY" 1>"/dev/$TTY" 2>&1
+          cd /
 
           # CI testi: atum.test=1 ile ag erisimini dener ve kapanir
           if grep -q 'atum.test=1' /proc/cmdline; then
@@ -203,12 +210,16 @@ jobs:
             exec /sbin/khepri 0
           fi
 
-          cat /etc/motd
-          if busybox --list | grep -qx cttyhack; then
-            exec setsid cttyhack /bin/sh -l
-          fi
-          exec /sbin/getty -n -l /bin/sh -L 115200 "$TTY"
+          exec /sbin/getty -L 115200 "$TTY" vt100
           EOF
+
+          # opsiyonel servisler (busybox'ta applet varsa)
+          mksv() { mkdir -p "$R/service/$1"; printf '#!/bin/sh\nexec 2>&1\n%s\n' "$2" > "$R/service/$1/run"; chmod 755 "$R/service/$1/run"; }
+          BBL="$(CH busybox --list)"
+          echo "$BBL" | grep -qx syslogd && mksv syslogd 'exec syslogd -n -O /var/log/messages'
+          echo "$BBL" | grep -qx klogd   && mksv klogd   'exec klogd -n'
+          echo "$BBL" | grep -qx crond   && mksv crond   'exec crond -f -L /var/log/cron.log'
+          echo "$BBL" | grep -qx ntpd    && mksv ntpd    'until ip route | grep -q "^default"; do sleep 1; done; exec ntpd -n -p pool.ntp.org'
 
           chmod 755 "$R"/etc/atum/1 "$R"/etc/atum/2 "$R"/etc/atum/3 "$R"/etc/atum/ctrlaltdel \
                     "$R"/etc/atum/udhcpc.script "$R"/service/dhcp/run "$R"/service/console/run
@@ -216,9 +227,19 @@ jobs:
           chmod 0 "$R/etc/atum/stopit" "$R/etc/atum/reboot"
 
           echo atum > "$R/etc/hostname"
-          printf '\nAlpine Linux %s (virt) + atum init  -  pure QEMU\nKapatmak icin: poweroff veya "khepri 0"\n\n' "$VER" > "$R/etc/motd"
+          printf '127.0.0.1\tatum localhost\n::1\t\tatum localhost\n' > "$R/etc/hosts"
+          printf 'proc /proc proc defaults 0 0\nsysfs /sys sysfs defaults 0 0\ndevpts /dev/pts devpts defaults 0 0\n' > "$R/etc/fstab"
+          printf '\nAlpine Linux %s (virt) + atum init - pure QEMU\nKapatmak icin: poweroff  |  yeniden baslatmak icin: reboot\n\n' "$VER" > "$R/etc/motd"
+          printf 'Alpine Linux %s - atum init (\\l)\n\nKullanici: root (parola yok)\n\n' "$VER" > "$R/etc/issue"
+          mkdir -p "$R/root" "$R/home" "$R/var/log" "$R/var/tmp" "$R/var/spool/cron/crontabs"
+          chmod 700 "$R/root"; chmod 1777 "$R/var/tmp"
+          sed -i 's/^root:[^:]*:/root::/' "$R/etc/shadow"      # parolasiz root girisi
+          rm -f "$R/etc/securetty"
           mkdir -p "$R/etc/profile.d"
-          echo "export PS1='atum:\w# '" > "$R/etc/profile.d/atum.sh"
+          printf "export PS1='\\h:\\w\\$ '\n" > "$R/etc/profile.d/atum.sh"
+          # poweroff/reboot/halt -> atum
+          for c in poweroff halt; do rm -f "$R/sbin/$c"; printf '#!/bin/sh\nexec /sbin/khepri 0\n' > "$R/sbin/$c"; chmod 755 "$R/sbin/$c"; done
+          rm -f "$R/sbin/reboot"; printf '#!/bin/sh\nexec /sbin/khepri 6\n' > "$R/sbin/reboot"; chmod 755 "$R/sbin/reboot"
 
           # ---------- 7) kucultme: firmware, dokuman, onbellek, gereksizler ----------
           cleanup
@@ -241,13 +262,13 @@ jobs:
             -machine q35,accel=kvm:tcg -cpu max -smp 1 -m "${MEM:-512}" \
             -nographic -no-reboot \
             -kernel vmlinuz-virt -initrd initramfs-atum.gz \
-            -append "console=ttyS0 rdinit=/sbin/init quiet loglevel=3 panic=-1 $EXTRA_APPEND" \
+            -append "console=ttyS0 rdinit=/sbin/init loglevel=6 panic=-1 $EXTRA_APPEND" \
             -nic user,model=virtio-net-pci
           EOF
           cat > "$OUT/run.bat" <<'EOF'
           @echo off
           cd /d "%~dp0"
-          qemu-system-x86_64 -machine q35,accel=whpx:tcg -cpu max -smp 1 -m 512 -nographic -no-reboot -kernel vmlinuz-virt -initrd initramfs-atum.gz -append "console=ttyS0 rdinit=/sbin/init quiet loglevel=3 panic=-1" -nic user,model=virtio-net-pci
+          qemu-system-x86_64 -machine q35,accel=whpx:tcg -cpu max -smp 1 -m 512 -nographic -no-reboot -kernel vmlinuz-virt -initrd initramfs-atum.gz -append "console=ttyS0 rdinit=/sbin/init loglevel=6 panic=-1" -nic user,model=virtio-net-pci
           EOF
           chmod 755 "$OUT/run.sh"
           chmod -R a+rX "$OUT"
