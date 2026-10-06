@@ -313,7 +313,7 @@ jobs:
           printf '/dev/vda1 / ext4 rw,relatime 0 1\nproc /proc proc defaults 0 0\nsysfs /sys sysfs defaults 0 0\ndevpts /dev/pts devpts defaults 0 0\n' > "$R/etc/fstab"
           printf '\nAlpine Linux %s (virt) + atum init - OpenRC yok\nKapatmak icin: poweroff  |  yeniden baslatmak icin: reboot\n\n' "$VER" > "$R/etc/motd"
           printf 'Alpine Linux %s - atum init (\\l)\n\nKullanici: root (parola yok)\n\n' "$VER" > "$R/etc/issue"
-          mkdir -p "$R/root" "$R/home" "$R/var/log" "$R/var/tmp" "$R/var/spool/cron/crontabs"
+          mkdir -p "$R/root" "$R/home" "$R/var/log" "$R/var/tmp" "$R/etc/crontabs"
           chmod 700 "$R/root"; chmod 1777 "$R/var/tmp"
           sed -i 's/^root:[^:]*:/root::/' "$R/etc/shadow"      # parolasiz root girisi
           rm -f "$R/etc/securetty"
