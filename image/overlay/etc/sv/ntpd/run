@@ -1,4 +1,0 @@
-#!/bin/sh
-exec 2>&1
-until ip route 2>/dev/null | grep -q '^default'; do sleep 2; done
-exec ntpd -n -p pool.ntp.org -p time.cloudflare.com -p time.google.com

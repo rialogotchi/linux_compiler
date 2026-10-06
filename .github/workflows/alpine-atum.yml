@@ -1,0 +1,278 @@
+name: Alpine 3.20 + atum (QEMU image)
+
+# Atum kaynak kodunun bulundugu repoya (package/ ve src/ klasorlerinin yaninda) koyun.
+# Actions -> "Alpine 3.20 + atum (QEMU image)" -> Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      alpine_version:
+        description: "Alpine surumu (minirootfs + linux-virt)"
+        default: "3.20.3"
+        required: true
+      extra_packages:
+        description: "Ek apk paketleri (bosluk ile ayirin)"
+        default: "curl"
+        required: false
+      max_mb:
+        description: "Cikti boyut siniri (MB)"
+        default: "100"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gerekli araclar
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio gzip qemu-system-x86
+
+      - name: Alpine rootfs + atum + virt kernel olustur
+        shell: sudo -E bash -eo pipefail {0}
+        env:
+          VER: ${{ inputs.alpine_version }}
+          EXTRA: ${{ inputs.extra_packages }}
+          MAXMB: ${{ inputs.max_mb }}
+        run: |
+          set -x
+          ARCH=x86_64
+          BR="v${VER%.*}"
+          SRC="$GITHUB_WORKSPACE"
+          [ -d "$SRC/package" ] || SRC="$(dirname "$(find "$SRC" -type d -name package -not -path '*/.git/*' -print -quit)")"
+          test -d "$SRC/src" || { echo "atum kaynagi (package/ ve src/) bulunamadi"; exit 1; }
+
+          W="$GITHUB_WORKSPACE/work"; R="$W/rootfs"; OUT="$GITHUB_WORKSPACE/out"
+          rm -rf "$W" "$OUT"; mkdir -p "$R" "$OUT"
+
+          cleanup() { umount -l "$R/proc" 2>/dev/null || true; umount -l "$R/dev" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          # ---------- 1) Alpine minirootfs ----------
+          cd "$W"
+          BASE="https://dl-cdn.alpinelinux.org/alpine/$BR/releases/$ARCH"
+          curl -fsSLO "$BASE/alpine-minirootfs-$VER-$ARCH.tar.gz"
+          curl -fsSLO "$BASE/alpine-minirootfs-$VER-$ARCH.tar.gz.sha256"
+          sha256sum -c "alpine-minirootfs-$VER-$ARCH.tar.gz.sha256"
+          tar -xzf "alpine-minirootfs-$VER-$ARCH.tar.gz" -C "$R"
+
+          mount -t proc proc "$R/proc"
+          mount --bind /dev "$R/dev"
+          echo "nameserver 1.1.1.1" > "$R/etc/resolv.conf"
+          printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' "$BR" "$BR" > "$R/etc/apk/repositories"
+          CH() { chroot "$R" /usr/bin/env -i PATH=/sbin:/bin:/usr/sbin:/usr/bin HOME=/root "$@"; }
+
+          # ---------- 2) paketler ----------
+          CH apk add --no-cache kmod $EXTRA
+
+          # ---------- 3) virt kernel (ayri root'a kur, sadece kernel + moduller al) ----------
+          mkdir -p "$R/tmp/kroot"
+          CH apk add --root /tmp/kroot --initdb --arch "$ARCH" --no-scripts --no-cache \
+            --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories linux-virt
+          KVER="$(ls "$R/tmp/kroot/lib/modules")"
+          echo "Kernel: $KVER"
+          cp "$R/tmp/kroot/boot/vmlinuz-virt" "$OUT/vmlinuz-virt"
+          mkdir -p "$R/lib/modules"
+          mv "$R/tmp/kroot/lib/modules/$KVER" "$R/lib/modules/"
+          rm -rf "$R/tmp/kroot"
+
+          # ---------- 4) modul budama: sadece QEMU/virtio ----------
+          CH depmod -a "$KVER"
+          WANT="virtio_net virtio_pci virtio_rng virtio_blk virtio_console virtio_balloon af_packet 9pnet_virtio 9p"
+          KEEP="$W/keep.txt"; : > "$KEEP"
+          for m in $WANT; do
+            { CH modprobe -S "$KVER" --show-depends "$m" 2>/dev/null || true; } | awk '/^insmod/{print $2}' >> "$KEEP"
+          done
+          sort -u "$KEEP" -o "$KEEP"
+          if [ -s "$KEEP" ]; then
+            ( cd "$R"
+              find "lib/modules/$KVER/kernel" -type f | while read -r f; do
+                grep -qxF "/$f" "$KEEP" || rm -f "$f"
+              done
+              find "lib/modules/$KVER/kernel" -type d -empty -delete )
+            CH depmod -a "$KVER"
+          else
+            echo "UYARI: virtio modulleri bulunamadi (kernel'e gomulu olabilir), budama atlandi"
+          fi
+          find "$R/lib/modules" -type f | head -50
+
+          # ---------- 5) atum derle (Alpine/musl icinde) ----------
+          mkdir -p "$R/tmp/atum"
+          cp -a "$SRC/package" "$SRC/src" "$R/tmp/atum/"
+          rm -rf "$R/tmp/atum/compile" "$R/tmp/atum/command"
+          echo 'gcc -O2 -Wall -D_GNU_SOURCE' > "$R/tmp/atum/src/conf-cc"
+          CH apk add --no-cache --virtual .build build-base
+          CH sh -ec 'cd /tmp/atum && sh package/compile'
+          CH sh -ec 'cd /tmp/atum && for c in $(cat package/commands); do install -m 755 command/$c /sbin/$c; done'
+          CH apk del .build
+          rm -rf "$R/tmp/atum"
+          ln -sfn sbin "$R/command"
+          ln -sf khepri "$R/sbin/init"      # kernel -> khepri -> /sbin/atum
+          ln -sf sbin/init "$R/init"
+
+          # ---------- 6) atum yapilandirmasi ----------
+          mkdir -p "$R/etc/atum" "$R/service/dhcp" "$R/service/console" "$R/run" "$R/tmp" "$R/proc" "$R/sys" "$R/dev"
+
+          cat > "$R/etc/atum/1" <<'EOF'
+          #!/bin/sh
+          # stage 1: tek seferlik hazirlik
+          export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+          mount -t proc proc /proc
+          mount -t sysfs sysfs /sys
+          mount -t devtmpfs devtmpfs /dev 2>/dev/null
+          mkdir -p /dev/pts /dev/shm
+          mount -t devpts devpts /dev/pts
+          mount -t tmpfs -o mode=1777 tmpfs /dev/shm
+          mount -t tmpfs -o mode=0755 tmpfs /run
+          hostname atum
+          ip link set lo up
+          for m in virtio_pci virtio_net virtio_rng virtio_blk af_packet 9pnet_virtio 9p; do
+            modprobe "$m" 2>/dev/null
+          done
+          echo "nameserver 10.0.2.3" > /etc/resolv.conf
+          hwclock -s -u 2>/dev/null
+          touch /etc/atum/stopit
+          chmod 0 /etc/atum/stopit
+          exit 0
+          EOF
+
+          cp "$SRC/etc/sysv/2" "$R/etc/atum/2"
+
+          cat > "$R/etc/atum/3" <<'EOF'
+          #!/bin/sh
+          exec 2>&1
+          PATH=/command:/sbin:/bin:/usr/sbin:/usr/bin
+          echo 'Waiting for services to stop...'
+          heka -w196 force-stop /service/*
+          heka exit /service/*
+          sync
+          echo 'Shutdown...'
+          EOF
+
+          cat > "$R/etc/atum/ctrlaltdel" <<'EOF'
+          #!/bin/sh
+          exec /sbin/khepri 0
+          EOF
+
+          cat > "$R/etc/atum/udhcpc.script" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            deconfig)
+              ip -4 addr flush dev "$interface"
+              ip link set "$interface" up
+              ;;
+            bound|renew)
+              ip addr replace "$ip/${mask:-24}" ${broadcast:+broadcast $broadcast} dev "$interface"
+              for r in $router; do
+                ip route replace default via "$r" dev "$interface"
+                break
+              done
+              : > /etc/resolv.conf
+              [ -n "$domain" ] && echo "search $domain" >> /etc/resolv.conf
+              for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done
+              ;;
+          esac
+          exit 0
+          EOF
+
+          cat > "$R/service/dhcp/run" <<'EOF'
+          #!/bin/sh
+          exec 2>&1
+          i=0
+          while [ ! -d /sys/class/net/eth0 ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+          ip link set eth0 up
+          exec udhcpc -f -i eth0 -s /etc/atum/udhcpc.script
+          EOF
+
+          cat > "$R/service/console/run" <<'EOF'
+          #!/bin/sh
+          TTY="$(awk '{print $NF}' /sys/class/tty/console/active 2>/dev/null)"
+          [ -n "$TTY" ] || TTY=ttyS0
+          exec 0<"/dev/$TTY" 1>"/dev/$TTY" 2>&1
+
+          # CI testi: atum.test=1 ile ag erisimini dener ve kapanir
+          if grep -q 'atum.test=1' /proc/cmdline; then
+            for i in $(seq 1 40); do ip route | grep -q '^default' && break; sleep 1; done
+            if wget -q -T 20 -O /dev/null http://dl-cdn.alpinelinux.org/alpine/; then
+              echo ATUM-NET-OK
+            else
+              echo ATUM-NET-FAIL
+            fi
+            exec /sbin/khepri 0
+          fi
+
+          cat /etc/motd
+          if busybox --list | grep -qx cttyhack; then
+            exec setsid cttyhack /bin/sh -l
+          fi
+          exec /sbin/getty -n -l /bin/sh -L 115200 "$TTY"
+          EOF
+
+          chmod 755 "$R"/etc/atum/1 "$R"/etc/atum/2 "$R"/etc/atum/3 "$R"/etc/atum/ctrlaltdel \
+                    "$R"/etc/atum/udhcpc.script "$R"/service/dhcp/run "$R"/service/console/run
+          touch "$R/etc/atum/stopit" "$R/etc/atum/reboot"
+          chmod 0 "$R/etc/atum/stopit" "$R/etc/atum/reboot"
+
+          echo atum > "$R/etc/hostname"
+          printf '\nAlpine Linux %s (virt) + atum init  -  pure QEMU\nKapatmak icin: poweroff veya "khepri 0"\n\n' "$VER" > "$R/etc/motd"
+          mkdir -p "$R/etc/profile.d"
+          echo "export PS1='atum:\w# '" > "$R/etc/profile.d/atum.sh"
+
+          # ---------- 7) kucultme: firmware, dokuman, onbellek, gereksizler ----------
+          cleanup
+          rm -rf "$R/lib/firmware" "$R/usr/share/man" "$R/usr/share/doc" "$R/usr/share/info" \
+                 "$R/var/cache/apk"/* "$R/boot" "$R/etc/apk/cache" "$R/root/.ash_history"
+          find "$R/usr/share" -type d -name locale -prune -exec rm -rf {} + 2>/dev/null || true
+          mkdir -p "$R/dev"
+          mknod -m 600 "$R/dev/console" c 5 1
+          mknod -m 666 "$R/dev/null" c 1 3
+
+          # ---------- 8) initramfs paketle ----------
+          ( cd "$R" && find . -print0 | cpio --null -o -H newc --owner 0:0 2>/dev/null | gzip -9 > "$OUT/initramfs-atum.gz" )
+
+          # ---------- 9) calistirma betikleri ----------
+          cat > "$OUT/run.sh" <<'EOF'
+          #!/bin/sh
+          # Kullanim: ./run.sh      (cikis: Ctrl-A sonra X)
+          cd "$(dirname "$0")"
+          exec qemu-system-x86_64 \
+            -machine q35,accel=kvm:tcg -cpu max -smp 1 -m "${MEM:-512}" \
+            -nographic -no-reboot \
+            -kernel vmlinuz-virt -initrd initramfs-atum.gz \
+            -append "console=ttyS0 rdinit=/sbin/init quiet loglevel=3 panic=-1 $EXTRA_APPEND" \
+            -nic user,model=virtio-net-pci
+          EOF
+          cat > "$OUT/run.bat" <<'EOF'
+          @echo off
+          cd /d "%~dp0"
+          qemu-system-x86_64 -machine q35,accel=whpx:tcg -cpu max -smp 1 -m 512 -nographic -no-reboot -kernel vmlinuz-virt -initrd initramfs-atum.gz -append "console=ttyS0 rdinit=/sbin/init quiet loglevel=3 panic=-1" -nic user,model=virtio-net-pci
+          EOF
+          chmod 755 "$OUT/run.sh"
+          chmod -R a+rX "$OUT"
+
+          ls -l "$OUT"
+          TOTAL=$(du -sm "$OUT" | cut -f1)
+          echo "Toplam boyut: ${TOTAL} MB (sinir ${MAXMB} MB)"
+          [ "$TOTAL" -le "$MAXMB" ] || { echo "::error::Boyut siniri asildi"; exit 1; }
+
+      - name: QEMU ile test (ag dahil)
+        continue-on-error: true
+        run: |
+          cd out
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          EXTRA_APPEND="atum.test=1" MEM=512 timeout 240 ./run.sh 2>&1 | tee ../boot.log
+          grep -q ATUM-NET-OK ../boot.log
+
+      - name: Zip olustur ve yukle
+        if: always()
+        run: |
+          cd out && zip -9 ../alpine-atum-qemu.zip *
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alpine-atum-qemu
+          path: |
+            alpine-atum-qemu.zip
+            boot.log

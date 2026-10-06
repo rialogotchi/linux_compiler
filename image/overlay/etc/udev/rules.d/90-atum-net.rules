@@ -1,2 +1,0 @@
-# Her fiziksel ag arayuzu icin bir atum servisi (DHCP / wifi) uretir
-ACTION=="add", SUBSYSTEM=="net", KERNEL!="lo", RUN+="/usr/libexec/atum-netadd $name"
