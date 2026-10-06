@@ -1,0 +1,21 @@
+usage: seshat [-tttvL] [-r c] [-R abc] [-l len] [-b buflen] dir ...
+
+111
+$Id: 5cb4c24b4d258e31e394ce1a6a036c1486b7915f $
+usage: seshat [-tttvL] [-r c] [-R abc] [-l len] [-b buflen] dir ...
+
+111
+0
+foo
+0
+foo
+bar
+baz
+0
+foo
+bar
+baz
+:oo
+:ar
+:az
+0

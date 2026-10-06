@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>atum(8)</title>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h3 id="name">NAME</h3>
+<p>atum - a UNIX process no 1</p>
+<h3 id="synopsis">SYNOPSIS</h3>
+<p><strong>atum</strong></p>
+<h3 id="description">DESCRIPTION</h3>
+<p><strong>atum</strong> must be run as Unix process no 1. It performs
+the system's booting, running, and shutdown in three stages:</p>
+<h3 id="stage-1">STAGE 1</h3>
+<p><strong>atum</strong> runs <em>/etc/atum/1</em> and waits for it to
+terminate. The system's one time tasks are done here.
+<em>/etc/atum/1</em> has full control of <em>/dev/console</em> to be
+able to start an emergency shell if the one time initialization tasks
+fail. If <em>/etc/atum/1</em> crashes, or exits 100,
+<strong>atum</strong> will skip stage 2 and enter stage 3.</p>
+<h3 id="stage-2">STAGE 2</h3>
+<p><strong>atum</strong> runs <em>/etc/atum/2</em>, which should not
+return until system shutdown; if it crashes, or exits 111, it will be
+restarted. Normally <em>/etc/atum/2</em> starts
+<strong>ennead</strong>(8). <strong>atum</strong> is able to handle
+the ctrl-alt-del keyboard request in stage 2, see below.</p>
+<h3 id="stage-3">STAGE 3</h3>
+<p>If <strong>atum</strong> is told to shutdown the system, or stage 2
+returns, it terminates stage 2 if it is running, and runs
+<em>/etc/atum/3</em>. The systems tasks to shutdown and possibly halt
+or reboot the system are done here. If stage 3 returns,
+<strong>atum</strong> checks if the file <em>/etc/atum/reboot</em>
+exists and has the execute by owner permission set. If so, the system is
+rebooted, it's halted otherwise. If <em>/etc/atum/nosync</em> exists,
+<strong>atum</strong> doesn't invoke sync(). This is useful in
+vservers.</p>
+<h3 id="ctrl-alt-del">CTRL-ALT-DEL</h3>
+<p>If <strong>atum</strong> receives the ctrl-alt-del keyboard request
+and the file <em>/etc/atum/ctrlaltdel</em> exists and has the execute
+by owner permission set, <strong>atum</strong> runs
+<em>/etc/atum/ctrlaltdel</em>, waits for it to terminate, and then
+sends itself a CONT signal.</p>
+<h3 id="signals">SIGNALS</h3>
+<p><strong>atum</strong> only accepts signals in stage 2.</p>
+<p>If <strong>atum</strong> receives a CONT signal and the file
+<em>/etc/atum/stopit</em> exists and has the execute by owner
+permission set, <strong>atum</strong> is told to shutdown the
+system.</p>
+<p>If <strong>atum</strong> receives an INT signal, a ctrl-alt-del
+keyboard request is triggered.</p>
+<p>If <strong>atum</strong> receives a PWR signal and the file
+<em>/etc/atum/pwrfail</em> exists and has the execute by owner
+permission set, <strong>atum</strong> runs <em>/etc/atum/pwrfail</em>,
+waits for it to terminate, and then sends itself a CONT signal. On
+platforms where PWR is not defined, USR2 is used instead.</p>
+<h3 id="see-also">SEE ALSO</h3>
+<p>khepri(8), ennead(8), wepwawet(8), heka(8), nehebkau(8), khnum(8),
+seshat(8)</p>
+<p>index.html</p>
+<h3 id="author">AUTHOR</h3>
+<p>Gerrit Pape &lt;pape@smarden.org&gt;</p>
+</body>
+</html>

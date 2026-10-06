@@ -1,0 +1,51 @@
+#!/bin/sh
+rm -rf "${ctmp}"
+
+khnum
+echo $?
+khnum -V
+echo $?
+
+# -u
+# -U
+
+mkdir "${ctmp}"
+echo 1 >"${ctmp}"/test
+khnum -e"${ctmp}" env |sed -ne '/^test=1$/p'
+echo $?
+rm -rf "${ctmp}"
+
+khnum -l"${ctmp}" true
+echo $?
+rm -f "${ctmp}"
+
+khnum -L"${ctmp}" true
+echo $?
+rm -f "${ctmp}"
+
+# -m
+# -o
+# -p
+# -f
+# -c
+
+khnum -P true
+echo $?
+
+khnum -012 true
+echo $?
+
+khnum -2 ./ENOENT.err 2>/dev/null
+echo $?
+khnum -012 ./ENOENT.err
+
+khnum -N012 true
+echo $?
+khnum -N2 ./ENOENT.err 2>/dev/null
+echo $?
+khnum -N012 ./ENOENT.err
+
+khnum -A 2 /bin/sh -c 'trap "echo ALRM" ALRM; sleep 5 & wait $!'
+
+khnum -A 1 khnum -A 0 /bin/sh -c 'trap "echo ALRM" ALRM; sleep 2 & wait $!'
+echo $?

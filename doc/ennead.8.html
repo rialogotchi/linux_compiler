@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>ennead(8)</title>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h3 id="name">NAME</h3>
+<p>ennead - starts and monitors a collection of nehebkau(8) processes</p>
+<h3 id="synopsis">SYNOPSIS</h3>
+<p><strong>ennead</strong> [-P] <em>dir</em> [ <em>log</em> ]</p>
+<h3 id="description">DESCRIPTION</h3>
+<p><em>dir</em> must be a directory. <em>log</em> is a space holder for
+a readproctitle log, and must be at least seven characters long or
+absent.</p>
+<p><strong>ennead</strong> starts a <strong>nehebkau</strong>(8) process
+for each subdirectory, or symlink to a directory, in the services
+directory <em>dir</em>, up to a limit of 1000 subdirectories, and
+restarts a <strong>nehebkau</strong>(8) process if it terminates.
+<strong>ennead</strong> skips subdirectory names starting with dots.
+<strong>nehebkau</strong>(8) must be in <strong>ennead</strong>'s
+PATH.</p>
+<p>At least every five seconds <strong>ennead</strong> checks whether
+the time of last modification, the inode, or the device, of the services
+directory <em>dir</em> has changed. If so, it re-scans the services
+directory, and if it sees a new subdirectory, or new symlink to a
+directory, in <em>dir</em>, it starts a new <strong>nehebkau</strong>(8)
+process; if <strong>ennead</strong> sees a subdirectory being removed
+that was previously there, it sends the corresponding
+<strong>nehebkau</strong>(8) process a TERM signal, stops monitoring this
+process, and so does not restart the <strong>nehebkau</strong>(8) process
+if it exits.</p>
+<p>If the <em>log</em> argument is given to <strong>ennead</strong>,
+all output to standard error is redirected to this <em>log</em>, which
+is similar to the daemontools' <strong>readproctitle</strong> log. To
+see the most recent error messages, use a process-listing tool such as
+<strong>ps</strong>(1). <strong>ennead</strong> writes a dot to the
+readproctitle log every 15 minutes so that old error messages
+expire.</p>
+<h3 id="options">OPTIONS</h3>
+<dl>
+<dt><strong>-P</strong></dt>
+<dd>
+use <strong>setsid</strong>(2) to run each <strong>nehebkau</strong>(8)
+process in a new session and separate process group.
+</dd>
+</dl>
+<h3 id="signals">SIGNALS</h3>
+<p>If <strong>ennead</strong> receives a TERM signal, it exits with 0
+immediately.</p>
+<p>If <strong>ennead</strong> receives a HUP signal, it sends a TERM
+signal to each <strong>nehebkau</strong>(8) process it is monitoring and
+then exits with 111.</p>
+<h3 id="see-also">SEE ALSO</h3>
+<p>heka(8), nehebkau(8), wepwawet(8), atum(8), khepri(8), khnum(8),
+seshat(8), setsid(2)</p>
+<p>index.html</p>
+<h3 id="author">AUTHOR</h3>
+<p>Gerrit Pape &lt;pape@smarden.org&gt;</p>
+</body>
+</html>

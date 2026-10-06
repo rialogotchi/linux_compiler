@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>atum - replacing init</title>
+<style type="text/css">pre { padding: 0em 1em; overflow: auto; }</style>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h1 id="atum---replacing-init">atum - replacing init</h1>
+<hr />
+<p><a href="#sysv">How to replace sysvinit on GNU/Linux</a><br />
+<a href="#bsd">How to replace init on *BSD</a><br />
+<a href="#macosx">How to replace init on MacOSX</a><br />
+<a href="#solaris">How to replace init on Solaris</a></p>
+<hr />
+<p><span id="sysv"></span></p>
+<h2 id="replacing-sysvinit-on-gnulinux">Replacing sysvinit on
+GNU/Linux</h2>
+<p>Follow these steps to migrate from <em>init</em> to <em>atum</em> on
+a <a href="https://en.wikipedia.org/wiki/Linux">GNU/Linux</a> system
+that runs with <a
+href="https://en.wikipedia.org/wiki/Init#SYSV">sysvinit</a>. The
+<code>/sbin/init</code> program is not replaced until step 4. The result
+after step 4 is a <em>atum</em> init setup with <em>sysvinit</em>'s
+boot-time system configuration/initialization.</p>
+<p>Login as root to a local serial or virtual terminal.</p>
+<h3 id="step-1-the-three-stages">Step 1: The three stages</h3>
+<p><a href="atum.8.html">atum</a> looks for the three stages
+implementing the system's <em>booting</em>, <em>running</em> and
+<em>shutdown</em> in <code>/etc/atum/1</code>,
+<code>/etc/atum/2</code> and <code>/etc/atum/3</code> respectively.
+Create the scripts now:</p>
+<pre><code>mkdir -p /etc/atum
+cp -p /package/admin/atum/etc/sysv/[123] /etc/atum/</code></pre>
+<p>Read the <em>inittab</em>(5) man page and look for
+<code>sysinit</code> in <code>/etc/inittab</code> to check that
+<code>/etc/init.d/rcS</code> is the <em>sysvinit</em> boot-time system
+configuration/initialization script on your system. If not, adapt
+<code>/etc/atum/1</code> accordingly.</p>
+<pre><code>man 5 inittab
+grep sysinit /etc/inittab</code></pre>
+<h3 id="step-2-the-atum-programs">Step 2: The atum programs</h3>
+<p>The <em>atum</em> programs must reside on the root partition,
+install them into <code>/sbin</code>:</p>
+<pre><code>install -m0755 /package/admin/atum/command/atum* /sbin/</code></pre>
+<h3 id="step-3-the-getties">Step 3: The getties</h3>
+<p>When booting with <em>atum</em> as <em>init</em>, at least one
+<code>getty</code> should run in stage 2 so that you are able to login
+to the terminal. Create the getty-default service directory now:</p>
+<pre><code>mkdir -p /etc/sv/getty-default</code></pre>
+<p>Run the <code>tty</code> command to get the name of the current
+terminal, and create the corresponding <code>getty-default</code> run
+script:</p>
+<pre><code>TTYNAME=$(tty); cat &gt;/etc/sv/getty-default/run &lt;&lt;EOT
+#!/bin/sh
+exec agetty ${TTYNAME##*/}
+EOT
+chmod 0755 /etc/sv/getty-default/run</code></pre>
+<p>Check <code>/etc/inittab</code> again, now for the default invocation
+of a <code>getty</code> program on your system, and if it’s not
+<code>agetty</code>, adapt <code>/etc/sv/getty-default/run</code>
+accordingly.</p>
+<pre><code>grep getty /etc/inittab</code></pre>
+<p>Tell <em>atum</em> about the <code>getty-default</code> service:</p>
+<pre><code>mkdir -p /service
+ln -s /etc/sv/getty-default /service/</code></pre>
+<p>Optionally create more <code>getty</code> services for additional
+terminals, look at <code>/etc/inittab</code>.</p>
+<h3 id="step-4-replace-the-sbininit-program">Step 4: Replace the
+<code>/sbin/init</code> program</h3>
+<p>Before replacing the <code>init</code> program, make sure that you
+are able to boot the system by other means to restore the original
+<code>/sbin/init</code> if anything goes wrong, e.g. with the
+installation image, a rescue system, or save a snapshot.</p>
+<p>Make a backup copy of the <code>/sbin/init</code> program and replace
+it with <code>/sbin/khepri</code>:</p>
+<pre><code>cp -p /sbin/init /sbin/init.sysv
+install /sbin/khepri /sbin/init</code></pre>
+<p>Boot your system with <em>atum</em> for the first time:</p>
+<pre><code>init.sysv 6</code></pre>
+<p>Watch the console output while <a href="atum.8.html">atum</a>
+starts the system, and runs <em>sysvinit</em>'s boot-time system
+configuration/initialization. Switch to the same terminal as before, the
+default <code>getty</code> runs there to login. Other services need to
+be migrated or started manually, see below.</p>
+<p>Use <strong>init 6</strong> to reboot and <strong>init 0</strong> to
+halt a system that runs with <em>atum</em>. This will cause <a
+href="atum.8.html">atum</a> to enter stage 3 and to tell the Linux
+kernel to reboot or halt when stage 3 is done.</p>
+<p>To report success:</p>
+<pre><code>( uname -a ; cat /etc/atum/[123] ) |mail maintainer@example.org</code></pre>
+<h3 id="step-5-service-migration">Step 5: Service migration</h3>
+<p>By default <em>atum</em> runs <em>sysvinit</em>'s
+<code>/etc/init.d/rcS</code> script in stage 1 as one time task, so
+boot-time system configuration/initialization is done as before:</p>
+<pre><code>#!/bin/sh
+# system one time tasks
+
+/etc/init.d/rcS
+/etc/init.d/rmnologin
+
+touch /etc/atum/stopit
+chmod 0 /etc/atum/stopit</code></pre>
+<p>The system runs with <a href="atum.8.html">atum</a> as
+<em>init</em> and service supervision enabled. You can now <a
+href="faq.html#run">add new services</a>, and migrate services from the
+original <em>init</em> scheme to <em>atum</em> service supervision,
+because of the <a href="benefits.html">benefits</a>. Take a look at
+these <a href="runscripts.html">run scripts</a> for popular
+services.</p>
+<p>Login as root to a local terminal. Usually <em>sysvinit</em> enters
+runlevel 2 after booting, look for <code>initdefault</code> in
+<code>/etc/inittab</code>. Run <em>sysvinit</em>'s <code>rc</code>
+script to start the services from <em>sysvinit</em>'s default runlevel
+(replace “<code>2</code>” with your system’s default):</p>
+<pre><code>/etc/init.d/rc 2</code></pre>
+<p>To migrate a service, <a href="faq.html#create">create a service
+directory</a>, stop the service again, and <a href="faq.html#tell">tell
+atum</a> about the new service.</p>
+<h4 id="example-sshd">Example: <code>sshd</code></h4>
+<pre><code>mkdir -p /etc/sv/sshd
+cat &gt;/etc/sv/sshd/run &lt;&lt;\EOT
+#!/bin/sh
+exec /usr/sbin/sshd -D
+EOT
+chmod 0755 /etc/sv/sshd/run
+/etc/init.d/sshd stop
+ln -s /etc/sv/sshd /service/</code></pre>
+<p>Check the status of the <em>atum</em> <code>sshd</code> service:</p>
+<pre><code>heka status sshd</code></pre>
+<h4 id="example-cron">Example: <code>cron</code></h4>
+<pre><code>mkdir -p /etc/sv/cron
+cat &gt;/etc/sv/cron/run &lt;&lt;\EOT
+#!/bin/sh
+exec cron -f
+EOT
+chmod 0755 /etc/sv/cron/run
+/etc/init.d/cron stop
+ln -s /etc/sv/cron /service/</code></pre>
+<p>Check the status of the <em>atum</em> <code>cron</code> service:</p>
+<pre><code>heka status cron</code></pre>
+<hr />
+<p><span id="bsd"></span></p>
+<h2 id="replacing-init-on-bsd">Replacing init on *BSD</h2>
+<p>Follow these steps to migrate from <em>init</em> to <em>atum</em> on
+<a href="https://www.freebsd.org/">FreeBSD</a> (14.4 and older), <a
+href="https://netbsd.org">NetBSD</a> (10.1 and older), or <a
+href="https://www.openbsd.org/">OpenBSD</a> (7.8 and older). The
+<code>/sbin/init</code> program is not replaced until step 4.</p>
+<p>Login as root to a local serial or virtual terminal.</p>
+<h3 id="step-1-the-three-stages-1">Step 1: The three stages</h3>
+<p><a href="atum.8.html">atum</a> looks for the three stages
+implementing the system's <em>booting</em>, <em>running</em> and
+<em>shutdown</em> in <code>/etc/atum/1</code>,
+<code>/etc/atum/2</code> and <code>/etc/atum/3</code> respectively.
+Create the scripts now:</p>
+<pre><code>mkdir -p /etc/atum
+cp -p /package/admin/atum/etc/bsd/[123] /etc/atum/</code></pre>
+<h3 id="step-2-the-atum-programs-1">Step 2: The atum programs</h3>
+<p>The <em>atum</em> programs must reside on the root partition,
+install them into <code>/sbin</code>:</p>
+<pre><code>install -m0500 /package/admin/atum/command/atum* /sbin/</code></pre>
+<h3 id="step-3-the-getties-1">Step 3: The getties</h3>
+<p>When booting with <em>atum</em> as <em>init</em>, at least one
+<code>getty</code> should run in stage 2 so that you are able to login
+to the terminal. Create the <code>getty-default</code> service directory
+now:</p>
+<pre><code>mkdir -p /etc/sv/getty-default</code></pre>
+<p>Run the <code>tty</code> command to get the name of the current
+terminal, and create the corresponding <code>getty-default</code> run
+script:</p>
+<pre><code>TTYNAME=$(tty); cat &gt;/etc/sv/getty-default/run &lt;&lt;EOT
+#!/bin/sh
+exec /usr/libexec/getty Pc ${TTYNAME##*/}
+EOT
+chmod 0755 /etc/sv/getty-default/run</code></pre>
+<p>Tell <em>atum</em> about the <code>getty-default</code> service:</p>
+<pre><code>mkdir -p /service
+ln -s /etc/sv/getty-default /service/</code></pre>
+<p>Optionally create more <code>getty</code> services for additional
+terminals, look at <code>/etc/ttys</code>.</p>
+<p>On a headless system you can also do the migration through
+<code>ssh</code> login without setting up any <code>getty</code>
+service.</p>
+<h3 id="step-4-replace-the-sbininit-program-1">Step 4: Replace the
+<code>/sbin/init</code> program</h3>
+<p>Before replacing the <code>init</code> program, make sure that you
+are able to boot the system by other means to restore the original
+<code>/sbin/init</code> if anything goes wrong, e.g. with the
+installation image, a rescue system, or save a snapshot.</p>
+<p>Make a backup copy of the <code>/sbin/init</code> program and replace
+it with <code>/sbin/khepri</code>:</p>
+<pre><code>cp -p /sbin/init /sbin/init.bsd
+install /sbin/khepri /sbin/init</code></pre>
+<p>Boot your system with <em>atum</em> for the first time:</p>
+<pre><code>reboot</code></pre>
+<p>Watch the console output while <a href="atum.8.html">atum</a>
+starts the system. Switch to the same terminal as before, the default
+<code>getty</code> runs there to login.</p>
+<p>Use <strong>init 6</strong> to reboot and <strong>init 0</strong> to
+halt a system that runs with <em>atum</em>. This will cause <a
+href="atum.8.html">atum</a> to enter stage 3 which runs
+<code>/sbin/reboot</code> or <code>/sbin/halt</code> as last
+command.</p>
+<p>To report success:</p>
+<pre><code>( uname -a ; cat /etc/atum/[123] ) |mail maintainer@example.org</code></pre>
+<h3 id="step-5-service-migration-1">Step 5: Service migration</h3>
+<p>By default <em>atum</em> runs the <code>/etc/rc</code> scripts in
+stage 1 as one time task, so services are started as before:</p>
+<pre><code>#!/bin/sh
+# system one time tasks
+
+/bin/sh /etc/rc autoboot
+
+touch /etc/atum/stopit
+chmod 0 /etc/atum/stopit</code></pre>
+<p>The system starts up as usual apart from the <code>getties</code>,
+but with <a href="atum.8.html">atum</a> as <em>init</em> and service
+supervision enabled. You can now <a href="faq.html#run">add new
+services</a>, and migrate services from the <em>/etc/rc.*</em> scheme to
+<em>atum</em> service supervision, because of the <a
+href="benefits.html">benefits</a>. Take a look at these <a
+href="runscripts.html">run scripts</a> for popular services.</p>
+<p>To migrate a service, <a href="faq.html#create">create a service
+directory</a>, stop the service if it is running, disable the service in
+<code>/etc/rc.conf</code> or remove the service startup from the
+<code>/etc/rc.*</code> scripts, and <a href="faq.html#tell">tell
+atum</a> about the new service.</p>
+<h4 id="example-sshd-1">Example: <code>sshd</code></h4>
+<pre><code>mkdir -p /etc/sv/sshd
+cat &gt;/etc/sv/sshd/run &lt;&lt;\EOT
+#!/bin/sh
+exec /usr/sbin/sshd -D
+EOT
+chmod 0755 /etc/sv/sshd/run
+/etc/rc.d/sshd stop</code></pre>
+<p>Edit <code>/etc/rc.conf</code> and disable <code>sshd</code> (ie. set
+to “<code>NO</code>”) to prevent it from being started again. Then
+enable the <em>atum</em> <code>sshd</code> service:</p>
+<pre><code>ln -s /etc/sv/sshd /service/</code></pre>
+<p>Check the status of the <em>atum</em> <code>sshd</code> service:</p>
+<pre><code>heka status sshd</code></pre>
+<h4 id="example-cron-1">Example: <code>cron</code></h4>
+<pre><code>mkdir -p /etc/sv/cron
+cat &gt;/etc/sv/cron/run &lt;&lt;\EOT
+#!/bin/sh
+exec cron -n
+EOT
+chmod 0755 /etc/sv/cron/run
+/etc/rc.d/cron stop</code></pre>
+<p>Edit <code>/etc/rc.conf</code> or <code>/etc/defaults/rc.conf</code>
+and disable <code>cron</code> (ie. set to “<code>NO</code>”) to prevent
+it from being started again. Then enable the <em>atum</em>
+<code>cron</code> service:</p>
+<pre><code>ln -s /etc/sv/cron /service/</code></pre>
+<p>Check the status of the <em>atum</em> <code>cron</code> service:</p>
+<pre><code>heka status cron</code></pre>
+<hr />
+<p><span id="macosx"></span></p>
+<h2 id="replacing-init-on-macosx">Replacing init on MacOSX</h2>
+<p>Replacing init on MacOSX is not yet supported. Please refer to the <a
+href="useinit.html">instructions</a> on how to use <em>atum</em>
+service supervision with the MacOSX init scheme.</p>
+<hr />
+<p><span id="solaris"></span></p>
+<h2 id="replacing-init-on-solaris">Replacing init on Solaris</h2>
+<p>Replacing init on Solaris is not yet supported. Please refer to the
+<a href="useinit.html">instructions</a> on how to use <em>atum</em>
+service supervision with the Solaris sysvinit scheme.</p>
+<hr />
+<p><a href="mailto:pape@smarden.org">Gerrit Pape
+&lt;pape@smarden.org&gt;</a></p>
+</body>
+</html>
