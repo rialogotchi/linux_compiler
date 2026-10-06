@@ -1,0 +1,21 @@
+#!/bin/sh
+case "$1" in
+  deconfig)
+    /usr/bin/ip addr flush dev "$interface" 2>/dev/null || true
+    /usr/bin/ip link set "$interface" up 2>/dev/null || true
+    ;;
+  bound|renew)
+    /usr/bin/ip link set "$interface" up 2>/dev/null || true
+    /usr/bin/ip addr flush dev "$interface" 2>/dev/null || true
+    /usr/bin/ip addr add "$ip/$subnet" dev "$interface" 2>/dev/null || /usr/bin/ip addr add "$ip" dev "$interface"
+    if [ -n "$router" ]; then
+      /usr/bin/ip route del default 2>/dev/null || true
+      for r in $router; do /usr/bin/ip route add default via "$r" dev "$interface" 2>/dev/null || true; done
+    fi
+    : > /etc/resolv.conf
+    for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done
+    ;;
+  nak|leasefail|nak)
+    ;;
+esac
+exit 0

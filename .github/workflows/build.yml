@@ -1,0 +1,277 @@
+name: Build ATUM Linux (musl + BusyBox + ATUM + opkg)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: Linux kernel version
+        required: false
+        default: '6.12.112'
+      busybox_version:
+        description: BusyBox version
+        required: false
+        default: '1.38.0'
+      opkg_version:
+        description: opkg version
+        required: false
+        default: '0.9.0'
+      image_size:
+        description: Raw image size
+        required: false
+        default: '512M'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      KERNEL_VERSION: ${{ inputs.kernel_version || '6.12.112' }}
+      BUSYBOX_VERSION: ${{ inputs.busybox_version || '1.38.0' }}
+      OPKG_VERSION: ${{ inputs.opkg_version || '0.9.0' }}
+      IMAGE_SIZE: ${{ inputs.image_size || '512M' }}
+      SRC: ${{ github.workspace }}/.src
+      ROOTFS: ${{ github.workspace }}/rootfs-build
+      OUT: ${{ github.workspace }}/dist
+      PREFIX: ${{ github.workspace }}/toolchain
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bc bison build-essential bzip2 ca-certificates cpio curl flex file gawk git \
+            grub-common grub-pc-bin libelf-dev libncurses-dev libssl-dev cmake pkg-config \
+            rsync tar xz-utils e2fsprogs parted util-linux qemu-system-x86 qemu-utils \
+            dosfstools gzip xorriso
+
+      - name: Prepare directories
+        run: |
+          set -eux
+          rm -rf "$SRC" "$ROOTFS" "$OUT" "$PREFIX"
+          mkdir -p "$SRC" "$ROOTFS" "$OUT" "$PREFIX"
+
+      - name: Build musl libc from source
+        run: |
+          set -eux
+          cd "$SRC"
+          curl -fL --retry 5 -o musl.tar.gz https://musl.libc.org/releases/musl-1.2.5.tar.gz
+          tar -xzf musl.tar.gz
+          cd musl-1.2.5
+          ./configure --prefix="$PREFIX" --disable-shared
+          make -j"$(nproc)"
+          make install
+          "$PREFIX/bin/musl-gcc" -dumpversion
+
+      - name: Build BusyBox against musl
+        run: |
+          set -eux
+          cd "$SRC"
+          curl -fL --retry 5 -o busybox.tar.bz2 "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2"
+          tar -xjf busybox.tar.bz2
+          cd "busybox-${BUSYBOX_VERSION}"
+          make distclean
+          cp "$GITHUB_WORKSPACE/configs/busybox.config" .config
+          make olddefconfig
+          make -j"$(nproc)" CC="$PREFIX/bin/musl-gcc" AR="$PREFIX/bin/musl-ar" RANLIB="$PREFIX/bin/musl-ranlib"
+          make CONFIG_PREFIX="$ROOTFS" install
+
+      - name: Build ATUM from the supplied source tree
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE/vendor/atum/src"
+          # ATUM uses its small djb-style build helpers. Configure them for the musl toolchain.
+          printf '%s\n' "exec $PREFIX/bin/musl-gcc -O2 -Wall -static" > conf-cc
+          printf '%s\n' "exec $PREFIX/bin/musl-gcc -static" > conf-ld
+          cd ..
+          sh package/compile
+          mkdir -p "$ROOTFS/command" "$ROOTFS/sbin"
+          while read -r name; do
+            install -Dm755 "command/$name" "$ROOTFS/command/$name"
+          done < package/commands
+          ln -sf /command/atum "$ROOTFS/sbin/atum"
+          ln -sf /command/khepri "$ROOTFS/sbin/khepri"
+          ln -sf /sbin/khepri "$ROOTFS/sbin/init"
+          file "$ROOTFS/command/atum" "$ROOTFS/command/ennead" "$ROOTFS/command/nehebkau"
+
+      - name: Build opkg against musl
+        run: |
+          set -eux
+          cd "$SRC"
+          curl -fL --retry 5 -o opkg.tar.gz "https://mirrors.edge.kernel.org/yocto/opkg/opkg-${OPKG_VERSION}.tar.gz"
+          tar -xzf opkg.tar.gz
+          cd "opkg-${OPKG_VERSION}"
+          cmake -S . -B build \
+            -DCMAKE_C_COMPILER="$PREFIX/bin/musl-gcc" \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+            -DCMAKE_EXE_LINKER_FLAGS=-static \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DSTATIC_LIBOPKG=ON \
+            -DWITH_CURL=OFF \
+            -DWITH_GPGME=OFF \
+            -DWITH_LIBOPKG_API=OFF \
+            -DWITH_LZ4=OFF \
+            -DWITH_XZ=OFF \
+            -DWITH_ZSTD=OFF \
+            -DWITH_BZIP2=OFF \
+            -DUSE_SOLVER_INTERNAL=ON
+          cmake --build build -j"$(nproc)"
+          DESTDIR="$ROOTFS" cmake --install build
+
+      - name: Install ATUM init tree, services and base filesystem
+        run: |
+          set -eux
+          mkdir -p "$ROOTFS"/{bin,sbin,usr/bin,usr/sbin,boot,dev,proc,sys,run,tmp,etc/atum,etc/service,etc/init.d,service,root,var/log,var/cache/opkg,var/lib/opkg/lists}
+          cp -a rootfs/. "$ROOTFS/"
+          ln -sf /bin/busybox "$ROOTFS/bin/sh"
+          for x in mount umount switch_root ip udhcpc getty ps kill reboot poweroff halt \
+                   hostname dmesg sync mkdir sleep cat echo ln rm chmod chown; do
+            ln -sf /bin/busybox "$ROOTFS/usr/bin/$x"
+          done
+          printf 'root:x:0:0:root:/root:/bin/sh\n' > "$ROOTFS/etc/passwd"
+          printf 'root:x:0:\n' > "$ROOTFS/etc/group"
+          printf 'root::0:0:99999:7:::\n' > "$ROOTFS/etc/shadow"
+          chmod 600 "$ROOTFS/etc/shadow"
+          printf '127.0.0.1 localhost\n127.0.1.1 atum\n::1 localhost ip6-localhost\n' > "$ROOTFS/etc/hosts"
+          printf 'atum\n' > "$ROOTFS/etc/hostname"
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$ROOTFS/etc/resolv.conf"
+          cat > "$ROOTFS/etc/opkg/opkg.conf" <<'CONF'
+          arch all 100
+          arch x86_64 200
+          lists_dir ext /var/lib/opkg/lists
+          cache_dir /var/cache/opkg
+          CONF
+          : > "$ROOTFS/var/lib/opkg/status"
+          chmod +x "$ROOTFS/etc/atum/1" "$ROOTFS/etc/atum/2" "$ROOTFS/etc/atum/3" \
+            "$ROOTFS/etc/atum/ctrlaltdel" "$ROOTFS/etc/service/network/run" "$ROOTFS/etc/service/getty/run"
+          ln -sf /etc/service/network "$ROOTFS/service/network"
+          ln -sf /etc/service/getty "$ROOTFS/service/getty"
+          chmod 1777 "$ROOTFS/tmp"
+
+      - name: Build Linux kernel for QEMU x86_64
+        run: |
+          set -eux
+          cd "$SRC"
+          curl -fL --retry 5 -o linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz"
+          tar -xJf linux.tar.xz
+          cd "linux-${KERNEL_VERSION}"
+          make mrproper
+          make x86_64_defconfig
+          # QEMU/virtio + common emulated NICs + PCI/USB/SCSI/storage + IPv4/IPv6.
+          scripts/config --enable CONFIG_DEVTMPFS
+          scripts/config --enable CONFIG_DEVTMPFS_MOUNT
+          scripts/config --enable CONFIG_BLK_DEV_INITRD
+          scripts/config --enable CONFIG_EXT4_FS
+          scripts/config --enable CONFIG_VIRTIO
+          scripts/config --enable CONFIG_VIRTIO_PCI
+          scripts/config --enable CONFIG_VIRTIO_BLK
+          scripts/config --enable CONFIG_VIRTIO_NET
+          scripts/config --enable CONFIG_PCI
+          scripts/config --enable CONFIG_ATA
+          scripts/config --enable CONFIG_SATA_AHCI
+          scripts/config --enable CONFIG_SCSI
+          scripts/config --enable CONFIG_BLK_DEV_SD
+          scripts/config --enable CONFIG_NET
+          scripts/config --enable CONFIG_INET
+          scripts/config --enable CONFIG_IPV6
+          scripts/config --enable CONFIG_NETDEVICES
+          scripts/config --enable CONFIG_E1000
+          scripts/config --enable CONFIG_E1000E
+          scripts/config --enable CONFIG_8139CP
+          scripts/config --enable CONFIG_8139TOO
+          scripts/config --enable CONFIG_PCNET32
+          scripts/config --enable CONFIG_TUN
+          scripts/config --enable CONFIG_BRIDGE
+          scripts/config --enable CONFIG_VLAN_8021Q
+          scripts/config --enable CONFIG_NETFILTER
+          scripts/config --enable CONFIG_NF_NAT
+          scripts/config --enable CONFIG_IP_NF_IPTABLES
+          scripts/config --enable CONFIG_IP_NF_FILTER
+          scripts/config --enable CONFIG_IP_NF_NAT
+          scripts/config --enable CONFIG_IP6_NF_IPTABLES
+          scripts/config --enable CONFIG_UNIX
+          scripts/config --enable CONFIG_TMPFS
+          scripts/config --enable CONFIG_PROC_FS
+          scripts/config --enable CONFIG_SYSFS
+          scripts/config --enable CONFIG_SERIAL_8250
+          scripts/config --enable CONFIG_SERIAL_8250_CONSOLE
+          scripts/config --enable CONFIG_VT
+          scripts/config --enable CONFIG_VT_CONSOLE
+          scripts/config --enable CONFIG_INPUT_EVDEV
+          scripts/config --enable CONFIG_USB
+          scripts/config --enable CONFIG_USB_EHCI_HCD
+          scripts/config --enable CONFIG_USB_XHCI_HCD
+          scripts/config --enable CONFIG_HID
+          scripts/config --enable CONFIG_HID_GENERIC
+          make olddefconfig
+          make -j"$(nproc)" bzImage modules
+          make INSTALL_MOD_PATH="$ROOTFS" modules_install
+          install -Dm644 arch/x86/boot/bzImage "$ROOTFS/boot/vmlinuz-${KERNEL_VERSION}"
+          cp System.map "$ROOTFS/boot/System.map-${KERNEL_VERSION}"
+          cp .config "$ROOTFS/boot/config-${KERNEL_VERSION}"
+
+      - name: Create bootable raw ext4 image
+        run: |
+          set -euxo pipefail
+          IMG="$OUT/atum-musl-busybox-atum-opkg-x86_64.img"
+          truncate -s "$IMAGE_SIZE" "$IMG"
+          parted -s "$IMG" mklabel msdos
+          parted -s "$IMG" mkpart primary ext4 1MiB 100%
+          parted -s "$IMG" set 1 boot on
+          LOOP=$(sudo losetup --find --show --partscan "$IMG")
+          MNT="$RUNNER_TEMP/atum-root"
+          cleanup() { sudo umount "$MNT" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          sudo mkfs.ext4 -F -L ATUMROOT "${LOOP}p1"
+          sudo mkdir -p "$MNT"
+          sudo mount "${LOOP}p1" "$MNT"
+          sudo cp -a "$ROOTFS/." "$MNT/"
+          sudo mkdir -p "$MNT/boot/grub"
+          sudo grub-install --target=i386-pc --boot-directory="$MNT/boot" \
+            --modules='biosdisk part_msdos ext2 normal linux echo test search' "$LOOP"
+          sudo tee "$MNT/boot/grub/grub.cfg" >/dev/null <<EOF
+          set timeout=0
+          set default=0
+          insmod part_msdos
+          insmod ext2
+          search --no-floppy --label ATUMROOT --set=root
+          linux /boot/vmlinuz-${KERNEL_VERSION} root=LABEL=ATUMROOT rootfstype=ext4 rw console=ttyS0,115200 console=tty0 net.ifnames=0 biosdevname=0
+          EOF
+          sudo sync
+          sudo umount "$MNT"
+          sudo losetup -d "$LOOP"
+          trap - EXIT
+          gzip -c "$IMG" > "$IMG.gz"
+          sha256sum "$IMG" "$IMG.gz" > "$OUT/SHA256SUMS"
+
+      - name: QEMU boot smoke test
+        run: |
+          set -eux
+          timeout 30s qemu-system-x86_64 \
+            -machine pc,accel=tcg \
+            -m 512M \
+            -nographic \
+            -serial mon:stdio \
+            -drive file="$OUT/atum-musl-busybox-atum-opkg-x86_64.img",format=raw,if=virtio \
+            -netdev user,id=n0 \
+            -device virtio-net-pci,netdev=n0 \
+            2>&1 | tee "$OUT/qemu-smoke.log" || true
+          grep -E 'Linux version|Run /sbin/init|atum|Welcome to ATUM|udhcpc|login:' "$OUT/qemu-smoke.log" || true
+
+      - name: Export kernel and rootfs archive
+        run: |
+          set -eux
+          cp "$ROOTFS/boot/vmlinuz-${KERNEL_VERSION}" "$OUT/"
+          tar -C "$ROOTFS" -czf "$OUT/rootfs-musl-busybox-atum-opkg-x86_64.tar.gz" .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: atum-linux-x86_64
+          path: dist/
+          if-no-files-found: error
