@@ -79,7 +79,13 @@ jobs:
           # BusyBox does not provide Linux-kconfig's olddefconfig target.
           # Feed empty answers so Kconfig accepts the defaults for any missing symbols.
           yes '' | make oldconfig
-          make -j"$(nproc)" CC="$PREFIX/bin/musl-gcc" AR="$PREFIX/bin/musl-ar" RANLIB="$PREFIX/bin/musl-ranlib"
+          # musl provides the C compiler/linker wrapper, not binutils such as ar/ranlib.
+          # Use the runner's binutils while compiling/linking BusyBox against musl.
+          make -j"$(nproc)" \
+            CC="$PREFIX/bin/musl-gcc" \
+            AR="$(command -v ar)" \
+            RANLIB="$(command -v ranlib)" \
+            NM="$(command -v nm)"
           make CONFIG_PREFIX="$ROOTFS" install
 
       - name: Build ATUM from the supplied source tree
