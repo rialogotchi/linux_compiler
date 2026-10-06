@@ -1,0 +1,9 @@
+
+  atum (init) + busybox + musl     SSH yok - konsoldan yonetilir
+
+  heka status /service/*      servis durumlari
+  ip addr ; ping 1.1.1.1      ag kontrolu
+  wifi-connect SSID PAROLA    wifi baglan
+  apk add <paket>             paket kur (internet gerekir)
+  reboot / poweroff           yeniden baslat / kapat
+

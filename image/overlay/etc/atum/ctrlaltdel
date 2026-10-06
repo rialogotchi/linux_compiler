@@ -1,0 +1,5 @@
+#!/bin/sh
+# Ctrl-Alt-Del => yeniden baslat
+PATH=/bin:/usr/bin
+touch /etc/atum/stopit /etc/atum/reboot
+chmod 100 /etc/atum/stopit /etc/atum/reboot

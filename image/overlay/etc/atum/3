@@ -1,0 +1,13 @@
+#!/bin/sh
+# STAGE 3: kapanis
+exec 2>&1
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+echo 'Servisler durduruluyor...'
+heka -w196 force-stop /service/*
+heka exit /service/*
+udevadm control --exit 2>/dev/null
+echo 'Diskler esitleniyor...'
+sync
+umount -a -r 2>/dev/null
+mount -o remount,ro / 2>/dev/null
+sync

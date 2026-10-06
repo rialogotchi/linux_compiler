@@ -1,0 +1,3 @@
+#!/bin/sh
+exec 2>&1
+exec syslogd -n -S -O /var/log/messages -s 512 -b 2

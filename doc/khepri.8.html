@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>khepri(8)</title>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h3 id="name">NAME</h3>
+<p>init - a UNIX process no 1</p>
+<h3 id="synopsis">SYNOPSIS</h3>
+<p><strong>init</strong> [ 0 | 6 ]</p>
+<h3 id="description">DESCRIPTION</h3>
+<p><strong>khepri</strong> is the first process the kernel starts.
+If <strong>khepri</strong> is started as process no 1, it runs and
+replaces itself with <strong>atum</strong>(8).</p>
+<p>If <strong>khepri</strong> is started while the system is up, it
+must be either called as <strong>init 0</strong> or <strong>init
+6</strong>:</p>
+<dl>
+<dt><strong>init 0</strong></dt>
+<dd>
+tells the Unix process no 1 to shutdown and halt the system. To signal
+<strong>atum</strong>(8) the system halt request,
+<strong>khepri</strong> removes all permissions of the file
+<em>/etc/atum/reboot</em> (chmod 0), and sets the execute by owner
+permission of the file <em>/etc/atum/stopit</em> (chmod 100). Then a
+CONT signal is sent to <strong>atum</strong>(8).
+</dd>
+<dt><strong>init 6</strong></dt>
+<dd>
+tells the Unix process no 1 to shutdown and reboot the system. To signal
+<strong>atum</strong>(8) the system reboot request,
+<strong>khepri</strong> sets the execute by owner permission of the
+files <em>/etc/atum/reboot</em> and <em>/etc/atum/stopit</em> (chmod
+100). Then a CONT signal is sent to <strong>atum</strong>(8).
+</dd>
+</dl>
+<h3 id="exit-codes">EXIT CODES</h3>
+<p><strong>khepri</strong> returns 111 on error, 0 in all other
+cases.</p>
+<h3 id="see-also">SEE ALSO</h3>
+<p>atum(8), ennead(8), wepwawet(8), heka(8), nehebkau(8), khnum(8),
+seshat(8)</p>
+<p>index.html</p>
+<h3 id="author">AUTHOR</h3>
+<p>Gerrit Pape &lt;pape@smarden.org&gt;</p>
+</body>
+</html>

@@ -1,0 +1,37 @@
+#!/bin/sh
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+i=$1
+[ -n "$i" ] || exit 0
+case $i in
+  lo|sit*|tunl*|ip6tnl*|ip6gre*|gre*|gretap*|erspan*|bond*|dummy*|ifb*|veth*|docker*|br-*|virbr*|tap*|tun*|wg*) exit 0;;
+esac
+[ -e "/sys/class/net/$i/device" ] || exit 0
+[ -e "/service/net-$i" ] && exit 0
+d=/run/atum/svc/net-$i
+mkdir -p "$d"
+if [ -d "/sys/class/net/$i/wireless" ] || [ -e "/sys/class/net/$i/phy80211" ]; then
+  command -v wpa_supplicant >/dev/null 2>&1 || exit 0
+  cat >"$d/run" <<EOT
+#!/bin/sh
+exec 2>&1
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+CONF=/etc/wpa_supplicant/wpa_supplicant.conf
+# wifi-connect SSID PAROLA ile ayar dosyasi olusturulana kadar bekler
+while [ ! -s "\$CONF" ]; do sleep 3; done
+rfkill unblock all 2>/dev/null
+ip link set dev $i up
+pkill -f "wpa_supplicant -B -i $i " 2>/dev/null
+wpa_supplicant -B -i $i -c "\$CONF" -P /run/wpa_supplicant.$i.pid
+exec udhcpc -f -i $i -s /usr/share/udhcpc/atum.script -x "hostname:\$(cat /etc/hostname)"
+EOT
+else
+  cat >"$d/run" <<EOT
+#!/bin/sh
+exec 2>&1
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+ip link set dev $i up
+exec udhcpc -f -i $i -s /usr/share/udhcpc/atum.script -x "hostname:\$(cat /etc/hostname)"
+EOT
+fi
+chmod 755 "$d/run"
+ln -s "$d" "/service/net-$i"

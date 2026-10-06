@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>nehebkau(8)</title>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h3 id="name">NAME</h3>
+<p>nehebkau - starts and monitors a service and optionally an appendant log
+service</p>
+<h3 id="synopsis">SYNOPSIS</h3>
+<p><strong>nehebkau</strong> <em>service</em></p>
+<h3 id="description">DESCRIPTION</h3>
+<p><em>service</em> must be a directory.</p>
+<p><strong>nehebkau</strong> switches to the directory <em>service</em> and
+starts ./run. If ./run exits and ./finish exists, <strong>nehebkau</strong>
+starts ./finish. If ./finish doesn't exist or ./finish exits,
+<strong>nehebkau</strong> restarts ./run.</p>
+<p>If ./run or ./finish exit immediately, <strong>nehebkau</strong> waits a
+second before starting ./finish or restarting ./run.</p>
+<p>Two arguments are given to ./finish. The first one is ./run's exit
+code, or -1 if ./run didn't exit normally. The second one is the least
+significant byte of the exit status as determined by
+<strong>waitpid</strong>(2); for instance it is 0 if ./run exited
+normally, and the signal number if ./run was terminated by a signal. If
+<strong>nehebkau</strong> cannot start ./run for some reason, the exit code
+is 111 and the status is 0.</p>
+<p>If the file <em>service</em>/down exists, <strong>nehebkau</strong> does
+not start ./run immediately. The control interface (see below) can be
+used to start the service and to give other commands to
+<strong>nehebkau</strong>.</p>
+<p>If the directory <em>service</em>/log exists, <strong>nehebkau</strong>
+creates a pipe, redirects <em>service</em>/run's and
+<em>service</em>/finish's standard output to the pipe, switches to the
+directory <em>service</em>/log and starts ./run. The standard input of
+<em>service</em>/log/run is redirected to read from the pipe.</p>
+<p><strong>nehebkau</strong> maintains status information in a binary
+format (compatible to the daemontools' <strong>supervise</strong>
+program) in <em>service</em>/supervise/status and
+<em>service</em>/log/supervise/status, and in a human-readable format in
+<em>service</em>/supervise/stat, <em>service</em>/log/supervise/stat,
+<em>service</em>/supervise/pid, <em>service</em>/log/supervise/pid.</p>
+<h3 id="control">CONTROL</h3>
+<p>The named pipes <em>service</em>/supervise/control, and (optionally)
+<em>service</em>/log/supervise/control are provided to give commands to
+<strong>nehebkau</strong>. You can use <strong>heka</strong>(8) to control
+the service or just write one of the following characters to the named
+pipe:</p>
+<dl>
+<dt><strong>u</strong></dt>
+<dd>
+Up. If the service is not running, start it. If the service stops,
+restart it.
+</dd>
+<dt><strong>d</strong></dt>
+<dd>
+Down. If the service is running, send it a TERM signal, and then a CONT
+signal. If ./run exits, start ./finish if it exists. After it stops, do
+not restart service.
+</dd>
+<dt><strong>o</strong></dt>
+<dd>
+Once. If the service is not running, start it. Do not restart it if it
+stops.
+</dd>
+<dt><strong>p</strong></dt>
+<dd>
+Pause. If the service is running, send it a STOP signal.
+</dd>
+<dt><strong>c</strong></dt>
+<dd>
+Continue. If the service is running, send it a CONT signal.
+</dd>
+<dt><strong>h</strong></dt>
+<dd>
+Hangup. If the service is running, send it a HUP signal.
+</dd>
+<dt><strong>a</strong></dt>
+<dd>
+Alarm. If the service is running, send it a ALRM signal.
+</dd>
+<dt><strong>i</strong></dt>
+<dd>
+Interrupt. If the service is running, send it a INT signal.
+</dd>
+<dt><strong>q</strong></dt>
+<dd>
+Quit. If the service is running, send it a QUIT signal.
+</dd>
+<dt><strong>1</strong></dt>
+<dd>
+User-defined 1. If the service is running, send it a USR1 signal.
+</dd>
+<dt><strong>2</strong></dt>
+<dd>
+User-defined 2. If the service is running, send it a USR2 signal.
+</dd>
+<dt><strong>t</strong></dt>
+<dd>
+Terminate. If the service is running, send it a TERM signal.
+</dd>
+<dt><strong>k</strong></dt>
+<dd>
+Kill. If the service is running, send it a KILL signal.
+</dd>
+<dt><strong>x</strong></dt>
+<dd>
+Exit. If the service is running, send it a TERM signal, and then a CONT
+signal. Do not restart the service. If the service is down, and no log
+service exists, <strong>nehebkau</strong> exits. If the service is down and
+a log service exists, <strong>nehebkau</strong> closes the standard input
+of the log service, and waits for it to terminate. If the log service is
+down, <strong>nehebkau</strong> exits. This command is ignored if it is
+given to <em>service</em>/log/supervise/control.
+</dd>
+</dl>
+<h4 id="example">EXAMPLE</h4>
+<p>To send a TERM signal to the socklog-unix service, either do
+“<code>heka term /service/socklog-unix</code>” or
+“<code>printf t &gt;/service/socklog-unix/supervise/control</code>”.</p>
+<p><strong>printf</strong>(1) usually blocks if no
+<strong>nehebkau</strong> process is running in the service directory.</p>
+<h3 id="customize-control">CUSTOMIZE CONTROL</h3>
+<p>For each control character <em>c</em> other than <strong>o</strong>,
+<strong>d</strong>, and <strong>x</strong> sent to the control pipe,
+<strong>nehebkau</strong> first checks if
+<em>service</em>/control/<em>c</em> exists and is executable. If so, it
+starts <em>service</em>/control/<em>c</em> and waits for it to
+terminate, before interpreting the command. If the program exits with
+return code 0, <strong>nehebkau</strong> refrains from sending the service
+the corresponding signal. The command <strong>o</strong> is always
+considered as command <strong>u</strong>. On command <strong>d</strong>
+first <em>service</em>/control/t is checked, and then
+<em>service</em>/control/d. On command <strong>x</strong> first
+<em>service</em>/control/t is checked, and then
+<em>service</em>/control/x. Specifically:</p>
+<p>If the service is running or paused, control characters
+<strong>d</strong> and <strong>x</strong> are handled as follows:</p>
+<ol type="1">
+<li><strong>nehebkau</strong> checks whether <em>service</em>/control/t
+exists and is executable and runs it if yes.</li>
+<li>If <em>service</em>/control/t exits nonzero, or is not executable or
+doesn't exist, <strong>nehebkau</strong> sends the service a TERM
+signal.</li>
+<li><strong>nehebkau</strong> sends the service a CONT signal, disregarding
+<em>service</em>/control/c even if it exists and is executable.</li>
+<li><strong>nehebkau</strong> checks whether <em>service</em>/control/d (or
+control/x) exists and is executable and runs it if yes. Its exit status
+is ignored.</li>
+</ol>
+<p>The control program runs with the process id of <em>service</em> as
+its first argument, or the empty string if there's no pid.</p>
+<p>The control of the optional log service cannot be customized.</p>
+<h3 id="signals">SIGNALS</h3>
+<p>If <strong>nehebkau</strong> receives a TERM signal, it acts as if the
+character x was written to the control pipe.</p>
+<h3 id="exit-codes">EXIT CODES</h3>
+<p><strong>nehebkau</strong> exits 111 on an error on startup or if another
+<strong>nehebkau</strong> is running in <em>service</em>.</p>
+<p><strong>nehebkau</strong> exits 0 if it was told to exit.</p>
+<h3 id="see-also">SEE ALSO</h3>
+<p>heka(8), khnum(8), seshat(8), atum(8), khepri(8), ennead(8),
+wepwawet(8)</p>
+<p>index.html</p>
+<h3 id="author">AUTHOR</h3>
+<p>Gerrit Pape &lt;pape@smarden.org&gt;</p>
+</body>
+</html>

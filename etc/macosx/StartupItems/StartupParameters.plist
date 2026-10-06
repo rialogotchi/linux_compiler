@@ -1,0 +1,11 @@
+{
+  Description     = "atum service supervision";
+  Provides        = ("atum");
+  Requires        = ("Disks");
+  OrderPreference = "None";
+  Messages =
+  {
+    start = "Starting atum service supervision";
+    stop  = "Stopping atum service supervision";
+  };
+}

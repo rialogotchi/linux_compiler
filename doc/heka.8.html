@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="color-scheme" content="light dark" />
+<title>heka(8)</title>
+</head>
+<body>
+<p><a href="https://smarden.org/pape/">G. Pape</a><br />
+<a href="index.html">atum</a></p>
+<hr />
+<h3 id="name">NAME</h3>
+<p>heka - control and manage services monitored by
+<strong>nehebkau</strong>(8)</p>
+<h3 id="synopsis">SYNOPSIS</h3>
+<p><strong>heka</strong> [-v] [-w <em>sec</em>] <em>command</em>
+<em>services</em></p>
+<p><strong>/etc/init.d/</strong><em>service</em> [-w <em>sec</em>]
+<em>command</em></p>
+<h3 id="description">DESCRIPTION</h3>
+<p>The <strong>heka</strong> program reports the current status and
+controls the state of services monitored by the
+<strong>nehebkau</strong>(8) supervisor.</p>
+<p><em>services</em> consists of one or more arguments, each argument
+naming a directory <em>service</em> used by <strong>nehebkau</strong>(8).
+If <em>service</em> doesn't start with a dot or slash and doesn't end
+with a slash, it is searched in the default services directory
+<em>/service/</em>, otherwise relative to the current directory.</p>
+<p><em>command</em> is one of up, down, status, once, pause, cont, hup,
+alarm, interrupt, 1, 2, term, kill, or exit, or start, stop, restart,
+shutdown, force-stop, force-reload, force-restart, force-shutdown.</p>
+<p>The <strong>heka</strong> program can be sym-linked to
+<em>/etc/init.d/</em> to provide an LSB init script interface. The
+<em>service</em> to be controlled then is specified by the base name of
+the “init script”.</p>
+<h3 id="commands">COMMANDS</h3>
+<dl>
+<dt><strong>status</strong></dt>
+<dd>
+Report the current status of the service, and the appendant log service
+if available, to standard output.
+</dd>
+<dt><strong>up</strong></dt>
+<dd>
+If the service is not running, start it. If the service stops, restart
+it.
+</dd>
+<dt><strong>down</strong></dt>
+<dd>
+If the service is running, send it the TERM signal, and the CONT signal.
+If ./run exits, start ./finish if it exists. After it stops, do not
+restart service.
+</dd>
+<dt><strong>once</strong></dt>
+<dd>
+If the service is not running, start it. Do not restart it if it stops.
+</dd>
+<dt><strong>pause cont hup alarm interrupt quit 1 2 term
+kill</strong></dt>
+<dd>
+If the service is running, send it the STOP, CONT, HUP, ALRM, INT, QUIT,
+USR1, USR2, TERM, or KILL signal respectively.
+</dd>
+<dt><strong>exit</strong></dt>
+<dd>
+If the service is running, send it the TERM signal, and the CONT signal.
+Do not restart the service. If the service is down, and no log service
+exists, <strong>nehebkau</strong>(8) exits. If the service is down and a
+log service exists, <strong>nehebkau</strong>(8) closes the standard input
+of the log service and waits for it to terminate. If the log service is
+down, <strong>nehebkau</strong>(8) exits. This command is ignored if it is
+given to an appendant log service.
+</dd>
+</dl>
+<p><strong>heka</strong> actually looks only at the first character of
+these <em>command</em>s.</p>
+<h4 id="commands-compatible-to-lsb-init-script-actions">Commands
+compatible to LSB init script actions</h4>
+<dl>
+<dt><strong>status</strong></dt>
+<dd>
+Same as <em>status</em>.
+</dd>
+<dt><strong>start</strong></dt>
+<dd>
+Same as <em>up</em>, but wait up to 7 seconds for the command to take
+effect. Then report the status or timeout. If the program
+<em>./check</em> exists in the service directory, <strong>heka</strong>
+runs this program to check whether the service is up and available; it's
+considered to be available if <em>./check</em> exits with 0.
+</dd>
+<dt><strong>stop</strong></dt>
+<dd>
+Same as <em>down</em>, but wait up to 7 seconds for the service to
+become down. Then report the status or timeout.
+</dd>
+<dt><strong>reload</strong></dt>
+<dd>
+Same as <em>hup</em>, and additionally report the status afterwards.
+</dd>
+<dt><strong>restart</strong></dt>
+<dd>
+Send the commands <em>term</em>, <em>cont</em>, and <em>up</em> to the
+service, and wait up to 7 seconds for the service to restart. Then
+report the status or timeout. If the program <em>./check</em> exists in
+the service directory, <strong>heka</strong> runs this program to check
+whether the service is up and available again; it's considered to be
+available if <em>./check</em> exits with 0.
+</dd>
+<dt><strong>shutdown</strong></dt>
+<dd>
+Same as <em>exit</em>, but wait up to 7 seconds for the
+<strong>nehebkau</strong>(8) process to terminate. Then report the status
+or timeout.
+</dd>
+<dt><strong>force-stop</strong></dt>
+<dd>
+Same as <em>down</em>, but wait up to 7 seconds for the service to
+become down. Then report the status, and on timeout send the service the
+<em>kill</em> command.
+</dd>
+<dt><strong>force-reload</strong></dt>
+<dd>
+Send the service the <em>term</em> and <em>cont</em> commands, and wait
+up to 7 seconds for the service to restart. Then report the status, and
+on timeout send the service the <em>kill</em> command.
+</dd>
+<dt><strong>force-restart</strong></dt>
+<dd>
+Send the service the <em>term</em>, <em>cont</em> and <em>up</em>
+commands, and wait up to 7 seconds for the service to restart. Then
+report the status, and on timeout send the service the <em>kill</em>
+command. If the program <em>./check</em> exists in the service
+directory, <strong>heka</strong> runs this program to check whether the
+service is up and available again; it's considered to be available if
+<em>./check</em> exits with 0.
+</dd>
+<dt><strong>force-shutdown</strong></dt>
+<dd>
+Same as <em>exit</em>, but wait up to 7 seconds for the
+<strong>nehebkau</strong>(8) process to terminate. Then report the status,
+and on timeout send the service the <em>kill</em> command.
+</dd>
+<dt><strong>try-restart</strong></dt>
+<dd>
+if the service is running, send it the <em>term</em> and <em>cont</em>
+commands, and wait up to 7 seconds for the service to restart. Then
+report the status or timeout.
+</dd>
+</dl>
+<h4 id="additional-commands">Additional Commands</h4>
+<dl>
+<dt><strong>check</strong></dt>
+<dd>
+Check for the service to be in the state that's been requested (up or
+down). Wait up to 7 seconds for the service to reach the requested
+state, then report the status or timeout. If the requested state of the
+service is <em>up</em>, and the program <em>./check</em> exists in the
+service directory, <strong>heka</strong> runs this program to check
+whether the service is up and running; it's considered to be up if
+<em>./check</em> exits with 0.
+</dd>
+</dl>
+<h3 id="options">OPTIONS</h3>
+<dl>
+<dt><strong>-v</strong></dt>
+<dd>
+If the <em>command</em> is up, down, term, once, cont, or exit, then
+wait up to 7 seconds for the command to take effect. Then report the
+status or timeout.
+</dd>
+<dt><strong>-w</strong> <em>sec</em></dt>
+<dd>
+Override the default timeout of 7 seconds with <em>sec</em> seconds.
+This option implies <em>-v</em>.
+</dd>
+</dl>
+<h3 id="environment">ENVIRONMENT</h3>
+<dl>
+<dt><strong>SVDIR</strong></dt>
+<dd>
+The environment variable $SVDIR overrides the default services directory
+<em>/service/</em>.
+</dd>
+<dt><strong>SVWAIT</strong></dt>
+<dd>
+The environment variable $SVWAIT overrides the default 7 seconds to wait
+for a command to take effect. It is overridden by the -w option.
+</dd>
+</dl>
+<h3 id="exit-codes">EXIT CODES</h3>
+<p><strong>heka</strong> exits 0, if the <em>command</em> was successfully
+sent to all <em>services</em>, and, if it was told to wait, the
+<em>command</em> has taken effect to all services.</p>
+<p>For each <em>service</em> that caused an error (e.g. the directory is
+not controlled by a <strong>nehebkau</strong>(8) process, or
+<strong>heka</strong> timed out while waiting), <strong>heka</strong>
+increases the exit code by one and exits non zero. The maximum is 99.
+<strong>heka</strong> exits 100 on error.</p>
+<p>If <strong>heka</strong> is called with a base name other than
+<strong>heka</strong>: it exits 1 on timeout or trouble sending the
+command; if the <em>command</em> is <strong>status</strong>, it exits 3
+if the service is down, and 4 if the status is unknown; it exits 2 on
+wrong usage, and 151 on error.</p>
+<h3 id="see-also">SEE ALSO</h3>
+<p>nehebkau(8), khnum(8), seshat(8), ennead(8), wepwawet(8), atum(8),
+khepri(8)</p>
+<p>index.html</p>
+<h3 id="author">AUTHOR</h3>
+<p>Gerrit Pape &lt;pape@smarden.org&gt;</p>
+</body>
+</html>

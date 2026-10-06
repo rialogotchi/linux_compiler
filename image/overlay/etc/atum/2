@@ -1,0 +1,7 @@
+#!/bin/sh
+# STAGE 2: servis denetimi (ennead /service dizinini izler)
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+exec 2>&1
+# acilista ag/DNS/HTTPS kontrolu (bir kez, arka planda; sonucu konsola yazar)
+( /usr/libexec/atum-netcheck >/dev/null 2>&1 & )
+exec env - PATH=$PATH ennead /service
