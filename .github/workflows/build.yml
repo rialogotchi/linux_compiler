@@ -76,7 +76,9 @@ jobs:
           cd "busybox-${BUSYBOX_VERSION}"
           make distclean
           cp "$GITHUB_WORKSPACE/configs/busybox.config" .config
-          make olddefconfig
+          # BusyBox does not provide Linux-kconfig's olddefconfig target.
+          # Feed empty answers so Kconfig accepts the defaults for any missing symbols.
+          yes '' | make oldconfig
           make -j"$(nproc)" CC="$PREFIX/bin/musl-gcc" AR="$PREFIX/bin/musl-ar" RANLIB="$PREFIX/bin/musl-ranlib"
           make CONFIG_PREFIX="$ROOTFS" install
 
