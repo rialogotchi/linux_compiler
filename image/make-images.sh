@@ -9,6 +9,11 @@ CMDLINE="rw console=ttyS0,115200 console=tty0 net.ifnames=0"
 KERNEL=$ROOT/boot/vmlinuz-lts
 [ -e "$KERNEL" ] || { echo "kernel yok: $KERNEL" >&2; exit 1; }
 
+NEED_MB=$(( $(du -sm "$ROOT" | cut -f1) * 115 / 100 + 140 ))
+if [ "$IMAGE_SIZE_MB" -lt "$NEED_MB" ]; then
+  echo "image_size_mb=$IMAGE_SIZE_MB yetersiz; rootfs icin en az $NEED_MB MB gerekli" >&2; exit 1
+fi
+
 GRUB_COMMON='set timeout=3
 serial --unit=0 --speed=115200
 terminal_input console serial

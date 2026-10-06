@@ -133,7 +133,10 @@ mkdir -p "$ROOT/etc/mkinitfs"
 echo "features=\"${feats# }\"" > "$ROOT/etc/mkinitfs/mkinitfs.conf"
 ls "$ROOT"/boot/
 KIMG=$(ls "$ROOT"/boot/vmlinuz-* | head -n1)
-ln -sf "$(basename "$KIMG")" "$ROOT/boot/vmlinuz-lts" 2>/dev/null || true
+if [ "$(basename "$KIMG")" != "vmlinuz-lts" ]; then
+  ln -sf "$(basename "$KIMG")" "$ROOT/boot/vmlinuz-lts"
+fi
+[ -s "$ROOT/boot/vmlinuz-lts" ] || { echo "kernel dosyasi bos/yok" >&2; exit 1; }
 mknod -m 600 "$ROOT/dev/console" c 5 1 2>/dev/null || true
 if ! mkinitfs -b "$ROOT" -c "$ROOT/etc/mkinitfs/mkinitfs.conf" -o "$ROOT/boot/initramfs-lts" "$KVER"; then
   echo "mkinitfs -b basarisiz, chroot ile deneniyor"
