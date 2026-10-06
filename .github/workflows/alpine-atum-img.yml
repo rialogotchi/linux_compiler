@@ -1,7 +1,7 @@
-name: Alpine 3.20 + atum (QEMU image)
+name: Alpine 3.20 + atum (QEMU disk image, no OpenRC)
 
-# Atum kaynak kodunun bulundugu repoya (package/ ve src/ klasorlerinin yaninda) koyun.
-# Actions -> "Alpine 3.20 + atum (QEMU image)" -> Run workflow
+# Atum kaynak kodunun bulundugu repoda calisir (package/ ve src/ kokte olmali).
+# Actions -> "Alpine 3.20 + atum (QEMU disk image, no OpenRC)" -> Run workflow
 
 on:
   workflow_dispatch:
@@ -14,8 +14,12 @@ on:
         description: "Ek apk paketleri (bosluk ile ayirin)"
         default: "curl"
         required: false
-      max_mb:
-        description: "Cikti boyut siniri (MB)"
+      image_mb:
+        description: ".img disk boyutu (MB)"
+        default: "256"
+        required: true
+      max_zip_mb:
+        description: "Cikti zip boyut siniri (MB)"
         default: "100"
         required: true
 
@@ -28,14 +32,15 @@ jobs:
       - name: Gerekli araclar
         run: |
           sudo apt-get update
-          sudo apt-get install -y cpio gzip qemu-system-x86
+          sudo apt-get install -y cpio gzip zstd xz-utils zip e2fsprogs util-linux \
+            syslinux extlinux syslinux-common qemu-system-x86
 
-      - name: Alpine rootfs + atum + virt kernel olustur
+      - name: Alpine rootfs + atum + kernel -> .img
         shell: sudo -E bash -eo pipefail {0}
         env:
           VER: ${{ inputs.alpine_version }}
           EXTRA: ${{ inputs.extra_packages }}
-          MAXMB: ${{ inputs.max_mb }}
+          IMGMB: ${{ inputs.image_mb }}
         run: |
           set -x
           ARCH=x86_64
@@ -44,10 +49,16 @@ jobs:
           [ -d "$SRC/package" ] || SRC="$(dirname "$(find "$SRC" -type d -name package -not -path '*/.git/*' -print -quit)")"
           test -d "$SRC/src" || { echo "atum kaynagi (package/ ve src/) bulunamadi"; exit 1; }
 
-          W="$GITHUB_WORKSPACE/work"; R="$W/rootfs"; OUT="$GITHUB_WORKSPACE/out"
-          rm -rf "$W" "$OUT"; mkdir -p "$R" "$OUT"
+          W="$GITHUB_WORKSPACE/work"; R="$W/rootfs"; I="$W/initramfs"; M="$W/mnt"; OUT="$GITHUB_WORKSPACE/out"
+          rm -rf "$W" "$OUT"; mkdir -p "$R" "$I" "$M" "$OUT"
 
-          cleanup() { umount -l "$R/proc" 2>/dev/null || true; umount -l "$R/dev" 2>/dev/null || true; }
+          LOOP=""
+          unmount_chroot() { umount -l "$R/proc" 2>/dev/null || true; umount -l "$R/dev" 2>/dev/null || true; }
+          cleanup() {
+            unmount_chroot
+            umount "$M" 2>/dev/null || true
+            [ -z "$LOOP" ] || losetup -d "$LOOP" 2>/dev/null || true
+          }
           trap cleanup EXIT
 
           # ---------- 1) Alpine minirootfs ----------
@@ -67,20 +78,74 @@ jobs:
           # ---------- 2) paketler ----------
           CH apk add --no-cache kmod $EXTRA
 
-          # ---------- 3) virt kernel (ayri root'a kur, sadece kernel + moduller al) ----------
-          mkdir -p "$R/tmp/kroot"
+          # ---------- 3) virt kernel + static busybox (ayri root'lara kur) ----------
+          mkdir -p "$R/tmp/kroot" "$R/tmp/bbroot"
           CH apk add --root /tmp/kroot --initdb --arch "$ARCH" --no-scripts --no-cache \
             --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories linux-virt
+          CH apk add --root /tmp/bbroot --initdb --arch "$ARCH" --no-scripts --no-cache \
+            --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories busybox-static
           KVER="$(ls "$R/tmp/kroot/lib/modules")"
           echo "Kernel: $KVER"
-          cp "$R/tmp/kroot/boot/vmlinuz-virt" "$OUT/vmlinuz-virt"
+          cp "$R/tmp/kroot/boot/vmlinuz-virt" "$W/vmlinuz-virt"
           mkdir -p "$R/lib/modules"
           mv "$R/tmp/kroot/lib/modules/$KVER" "$R/lib/modules/"
-          rm -rf "$R/tmp/kroot"
+          mkdir -p "$I/bin"
+          cp "$R/tmp/bbroot/bin/busybox.static" "$I/bin/busybox"
+          rm -rf "$R/tmp/kroot" "$R/tmp/bbroot"
 
-          # ---------- 4) modul budama: sadece QEMU/virtio ----------
+          # ---------- 4) initramfs: sadece diskten kok dosya sistemini baglamak icin ----------
           CH depmod -a "$KVER"
-          WANT="virtio_net virtio_pci virtio_rng virtio_blk virtio_console virtio_balloon af_packet 9pnet_virtio 9p"
+          mkdir -p "$I/proc" "$I/sys" "$I/dev" "$I/newroot" "$I/m"
+          for a in sh mount umount insmod switch_root sleep mkdir cat; do ln -sf busybox "$I/bin/$a"; done
+          mknod -m 600 "$I/dev/console" c 5 1
+          mknod -m 666 "$I/dev/null" c 1 3
+          n=0
+          for m in virtio_pci virtio_blk ext4; do
+            { CH modprobe -S "$KVER" --show-depends "$m" 2>/dev/null || true; } | awk '/^insmod/{print $2}'
+          done | awk '!seen[$0]++' > "$W/initmods.txt"
+          while read -r p; do
+            n=$((n+1)); b="$(basename "$p")"; b="${b%.gz}"; b="${b%.zst}"; b="${b%.xz}"
+            case "$p" in
+              *.gz)  zcat "$R$p" > "$I/m/$(printf %02d $n)-$b" ;;
+              *.zst) zstd -dc "$R$p" > "$I/m/$(printf %02d $n)-$b" ;;
+              *.xz)  xzcat "$R$p" > "$I/m/$(printf %02d $n)-$b" ;;
+              *)     cp "$R$p" "$I/m/$(printf %02d $n)-$b" ;;
+            esac
+          done < "$W/initmods.txt"
+          cat "$W/initmods.txt"
+
+          cat > "$I/init" <<'EOF'
+          #!/bin/sh
+          export PATH=/bin
+          echo "[initramfs] Alpine/atum: storage driver yukleniyor"
+          mount -t proc proc /proc
+          mount -t sysfs sysfs /sys
+          mount -t devtmpfs devtmpfs /dev
+          for m in /m/*.ko; do
+            [ -e "$m" ] || continue
+            echo "[initramfs]   insmod ${m##*/}"
+            insmod "$m"
+          done
+          ROOT=
+          for x in $(cat /proc/cmdline); do
+            case "$x" in root=*) ROOT="${x#root=}" ;; esac
+          done
+          i=0
+          while [ ! -b "$ROOT" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+          echo "[initramfs] root: $ROOT"
+          if ! mount -t ext4 -o rw "$ROOT" /newroot; then
+            echo "[initramfs] kok dosya sistemi baglanamadi"
+            exec sh
+          fi
+          umount /proc; umount /sys; umount /dev
+          echo "[initramfs] switch_root -> /sbin/init (atum)"
+          exec switch_root /newroot /sbin/init
+          EOF
+          chmod 755 "$I/init"
+          ( cd "$I" && find . -print0 | cpio --null -o -H newc --owner 0:0 2>/dev/null | gzip -9 > "$W/initramfs-atum.gz" )
+
+          # ---------- 5) rootfs icin modul budama: sadece QEMU/virtio/ext4 ----------
+          WANT="virtio_net virtio_pci virtio_rng virtio_blk virtio_console virtio_balloon af_packet 9pnet_virtio 9p ext4"
           KEEP="$W/keep.txt"; : > "$KEEP"
           for m in $WANT; do
             { CH modprobe -S "$KVER" --show-depends "$m" 2>/dev/null || true; } | awk '/^insmod/{print $2}' >> "$KEEP"
@@ -94,11 +159,10 @@ jobs:
               find "lib/modules/$KVER/kernel" -type d -empty -delete )
             CH depmod -a "$KVER"
           else
-            echo "UYARI: virtio modulleri bulunamadi (kernel'e gomulu olabilir), budama atlandi"
+            echo "UYARI: modul bulunamadi (kernel'e gomulu olabilir), budama atlandi"
           fi
-          find "$R/lib/modules" -type f | head -50
 
-          # ---------- 5) atum derle (Alpine/musl icinde) ----------
+          # ---------- 6) atum derle (Alpine/musl icinde) ----------
           mkdir -p "$R/tmp/atum"
           cp -a "$SRC/package" "$SRC/src" "$R/tmp/atum/"
           rm -rf "$R/tmp/atum/compile" "$R/tmp/atum/command"
@@ -110,10 +174,19 @@ jobs:
           rm -rf "$R/tmp/atum"
           ln -sfn sbin "$R/command"
           ln -sf khepri "$R/sbin/init"      # kernel -> khepri -> /sbin/atum
-          ln -sf sbin/init "$R/init"
 
-          # ---------- 6) atum yapilandirmasi ----------
-          mkdir -p "$R/etc/atum" "$R/service/dhcp" "$R/service/console" "$R/run" "$R/tmp" "$R/proc" "$R/sys" "$R/dev"
+          # ---------- 7) OpenRC'yi tamamen temizle ----------
+          CH apk del openrc 2>/dev/null || true
+          rm -rf "$R"/sbin/openrc* "$R"/sbin/rc-* "$R"/sbin/rc "$R"/etc/init.d "$R"/etc/runlevels \
+                 "$R"/etc/rc.conf "$R"/etc/conf.d "$R"/lib/rc "$R"/usr/share/openrc "$R"/etc/inittab
+          for f in sbin/openrc sbin/openrc-init sbin/openrc-run sbin/rc-service sbin/rc-update sbin/rc-status; do
+            test ! -e "$R/$f" || { echo "::error::OpenRC kalintisi: $f"; exit 1; }
+          done
+          ! grep -qx openrc "$R/etc/apk/world" || { echo "::error::openrc world icinde"; exit 1; }
+
+          # ---------- 8) atum yapilandirmasi ----------
+          mkdir -p "$R/etc/atum" "$R/service/dhcp" "$R/service/console" "$R/service/tty1" \
+                   "$R/run" "$R/tmp" "$R/proc" "$R/sys" "$R/dev"
 
           cat > "$R/etc/atum/1" <<'EOF'
           #!/bin/sh
@@ -131,9 +204,10 @@ jobs:
           step "Mounting /dev/shm"     mount -t tmpfs -o mode=1777 tmpfs /dev/shm
           step "Mounting /run"         mount -t tmpfs -o mode=0755 tmpfs /run
           mkdir -p /run/lock /var/log
+          step "Remounting / read-write" mount -o remount,rw /
           step "Setting hostname"      hostname "$(cat /etc/hostname)"
           step "Bringing up loopback"  ip link set lo up
-          for m in virtio_pci virtio_net virtio_rng virtio_blk af_packet 9pnet_virtio 9p; do
+          for m in virtio_pci virtio_net virtio_rng af_packet 9pnet_virtio 9p; do
             step "Loading module $m" modprobe "$m"
           done
           step "Syncing clock from RTC" hwclock -s -u
@@ -153,7 +227,9 @@ jobs:
           echo 'Waiting for services to stop...'
           heka -w196 force-stop /service/*
           heka exit /service/*
+          echo 'Syncing disks...'
           sync
+          mount -o remount,ro / 2>/dev/null
           echo 'Shutdown...'
           EOF
 
@@ -199,8 +275,8 @@ jobs:
           exec 0<"/dev/$TTY" 1>"/dev/$TTY" 2>&1
           cd /
 
-          # CI testi: atum.test=1 ile ag erisimini dener ve kapanir
-          if grep -q 'atum.test=1' /proc/cmdline; then
+          # CI testi: /etc/atum/test varsa ag erisimini dener ve kapanir
+          if [ -e /etc/atum/test ] || grep -q 'atum.test=1' /proc/cmdline; then
             for i in $(seq 1 40); do ip route | grep -q '^default' && break; sleep 1; done
             if wget -q -T 20 -O /dev/null http://dl-cdn.alpinelinux.org/alpine/; then
               echo ATUM-NET-OK
@@ -213,7 +289,13 @@ jobs:
           exec /sbin/getty -L 115200 "$TTY" vt100
           EOF
 
-          # opsiyonel servisler (busybox'ta applet varsa)
+          cat > "$R/service/tty1/run" <<'EOF'
+          #!/bin/sh
+          exec 2>&1
+          [ -e /etc/atum/test ] && exec sleep 100000
+          exec /sbin/getty 38400 tty1
+          EOF
+
           mksv() { mkdir -p "$R/service/$1"; printf '#!/bin/sh\nexec 2>&1\n%s\n' "$2" > "$R/service/$1/run"; chmod 755 "$R/service/$1/run"; }
           BBL="$(CH busybox --list)"
           echo "$BBL" | grep -qx syslogd && mksv syslogd 'exec syslogd -n -O /var/log/messages'
@@ -222,74 +304,109 @@ jobs:
           echo "$BBL" | grep -qx ntpd    && mksv ntpd    'until ip route | grep -q "^default"; do sleep 1; done; exec ntpd -n -p pool.ntp.org'
 
           chmod 755 "$R"/etc/atum/1 "$R"/etc/atum/2 "$R"/etc/atum/3 "$R"/etc/atum/ctrlaltdel \
-                    "$R"/etc/atum/udhcpc.script "$R"/service/dhcp/run "$R"/service/console/run
+                    "$R"/etc/atum/udhcpc.script "$R"/service/dhcp/run "$R"/service/console/run "$R"/service/tty1/run
           touch "$R/etc/atum/stopit" "$R/etc/atum/reboot"
           chmod 0 "$R/etc/atum/stopit" "$R/etc/atum/reboot"
 
           echo atum > "$R/etc/hostname"
           printf '127.0.0.1\tatum localhost\n::1\t\tatum localhost\n' > "$R/etc/hosts"
-          printf 'proc /proc proc defaults 0 0\nsysfs /sys sysfs defaults 0 0\ndevpts /dev/pts devpts defaults 0 0\n' > "$R/etc/fstab"
-          printf '\nAlpine Linux %s (virt) + atum init - pure QEMU\nKapatmak icin: poweroff  |  yeniden baslatmak icin: reboot\n\n' "$VER" > "$R/etc/motd"
+          printf '/dev/vda1 / ext4 rw,relatime 0 1\nproc /proc proc defaults 0 0\nsysfs /sys sysfs defaults 0 0\ndevpts /dev/pts devpts defaults 0 0\n' > "$R/etc/fstab"
+          printf '\nAlpine Linux %s (virt) + atum init - OpenRC yok\nKapatmak icin: poweroff  |  yeniden baslatmak icin: reboot\n\n' "$VER" > "$R/etc/motd"
           printf 'Alpine Linux %s - atum init (\\l)\n\nKullanici: root (parola yok)\n\n' "$VER" > "$R/etc/issue"
           mkdir -p "$R/root" "$R/home" "$R/var/log" "$R/var/tmp" "$R/var/spool/cron/crontabs"
           chmod 700 "$R/root"; chmod 1777 "$R/var/tmp"
           sed -i 's/^root:[^:]*:/root::/' "$R/etc/shadow"      # parolasiz root girisi
           rm -f "$R/etc/securetty"
           mkdir -p "$R/etc/profile.d"
-          printf "export PS1='\\h:\\w\\$ '\n" > "$R/etc/profile.d/atum.sh"
-          # poweroff/reboot/halt -> atum
+          printf "export PS1='\\\\h:\\\\w\\\\$ '\n" > "$R/etc/profile.d/atum.sh"
           for c in poweroff halt; do rm -f "$R/sbin/$c"; printf '#!/bin/sh\nexec /sbin/khepri 0\n' > "$R/sbin/$c"; chmod 755 "$R/sbin/$c"; done
           rm -f "$R/sbin/reboot"; printf '#!/bin/sh\nexec /sbin/khepri 6\n' > "$R/sbin/reboot"; chmod 755 "$R/sbin/reboot"
 
-          # ---------- 7) kucultme: firmware, dokuman, onbellek, gereksizler ----------
-          cleanup
+          # ---------- 9) kucultme: firmware, dokuman, onbellek ----------
+          unmount_chroot
           rm -rf "$R/lib/firmware" "$R/usr/share/man" "$R/usr/share/doc" "$R/usr/share/info" \
                  "$R/var/cache/apk"/* "$R/boot" "$R/etc/apk/cache" "$R/root/.ash_history"
           find "$R/usr/share" -type d -name locale -prune -exec rm -rf {} + 2>/dev/null || true
           mkdir -p "$R/dev"
+          rm -f "$R/dev/console" "$R/dev/null"
           mknod -m 600 "$R/dev/console" c 5 1
           mknod -m 666 "$R/dev/null" c 1 3
 
-          # ---------- 8) initramfs paketle ----------
-          ( cd "$R" && find . -print0 | cpio --null -o -H newc --owner 0:0 2>/dev/null | gzip -9 > "$OUT/initramfs-atum.gz" )
+          # ---------- 10) .img olustur: MBR + ext4 + extlinux + kernel + initramfs ----------
+          IMG="$OUT/alpine-atum.img"
+          truncate -s "${IMGMB}M" "$IMG"
+          printf 'label: dos\nstart=2048, type=83, bootable\n' | sfdisk "$IMG"
+          dd if=/usr/lib/syslinux/mbr/mbr.bin of="$IMG" bs=440 count=1 conv=notrunc
+          SIZE=$(( $(stat -c %s "$IMG") - 1048576 ))
+          LOOP="$(losetup --find --show -o 1048576 --sizelimit "$SIZE" "$IMG")"
+          mkfs.ext4 -F -q -L atumroot -O ^64bit,^metadata_csum "$LOOP"
+          mount "$LOOP" "$M"
+          tar -C "$R" -cpf - . | tar -C "$M" -xpf -
+          mkdir -p "$M/boot/extlinux"
+          cp "$W/vmlinuz-virt" "$W/initramfs-atum.gz" "$M/boot/"
+          cat > "$M/boot/extlinux/extlinux.conf" <<'EOF'
+          DEFAULT atum
+          PROMPT 0
+          TIMEOUT 5
+          SERIAL 0 115200
 
-          # ---------- 9) calistirma betikleri ----------
+          LABEL atum
+            LINUX /boot/vmlinuz-virt
+            INITRD /boot/initramfs-atum.gz
+            APPEND root=/dev/vda1 rw console=tty0 console=ttyS0,115200 loglevel=6 panic=-1
+          EOF
+          extlinux --install "$M/boot/extlinux"
+          df -h "$M"
+          ls -l "$M" "$M/boot"
+          sync
+          umount "$M"
+          losetup -d "$LOOP"; LOOP=""
+
+          # ---------- 11) calistirma betikleri ----------
           cat > "$OUT/run.sh" <<'EOF'
           #!/bin/sh
           # Kullanim: ./run.sh      (cikis: Ctrl-A sonra X)
+          # RAM: MEM=1024 ./run.sh   |  degisiklikler kaydedilmesin: SNAP=-snapshot ./run.sh
           cd "$(dirname "$0")"
           exec qemu-system-x86_64 \
             -machine q35,accel=kvm:tcg -cpu max -smp 1 -m "${MEM:-512}" \
-            -nographic -no-reboot \
-            -kernel vmlinuz-virt -initrd initramfs-atum.gz \
-            -append "console=ttyS0 rdinit=/sbin/init loglevel=6 panic=-1 $EXTRA_APPEND" \
+            -nographic -no-reboot $SNAP \
+            -drive file="${IMG:-alpine-atum.img}",format=raw,if=virtio \
             -nic user,model=virtio-net-pci
           EOF
           cat > "$OUT/run.bat" <<'EOF'
           @echo off
           cd /d "%~dp0"
-          qemu-system-x86_64 -machine q35,accel=whpx:tcg -cpu max -smp 1 -m 512 -nographic -no-reboot -kernel vmlinuz-virt -initrd initramfs-atum.gz -append "console=ttyS0 rdinit=/sbin/init loglevel=6 panic=-1" -nic user,model=virtio-net-pci
+          qemu-system-x86_64 -machine q35,accel=whpx:tcg -cpu max -smp 1 -m 512 -nographic -no-reboot -drive file=alpine-atum.img,format=raw,if=virtio -nic user,model=virtio-net-pci
           EOF
           chmod 755 "$OUT/run.sh"
           chmod -R a+rX "$OUT"
-
           ls -l "$OUT"
-          TOTAL=$(du -sm "$OUT" | cut -f1)
-          echo "Toplam boyut: ${TOTAL} MB (sinir ${MAXMB} MB)"
-          [ "$TOTAL" -le "$MAXMB" ] || { echo "::error::Boyut siniri asildi"; exit 1; }
 
-      - name: QEMU ile test (ag dahil)
+      - name: QEMU ile test (disk boot + ag)
         continue-on-error: true
         run: |
           cd out
+          cp --sparse=always alpine-atum.img ../test.img
+          sudo mkdir -p /mnt/t
+          sudo mount -o loop,offset=1048576 ../test.img /mnt/t
+          sudo touch /mnt/t/etc/atum/test
+          sudo umount /mnt/t
           sudo chmod 666 /dev/kvm 2>/dev/null || true
-          EXTRA_APPEND="atum.test=1" MEM=512 timeout 240 ./run.sh 2>&1 | tee ../boot.log
+          IMG=../test.img MEM=512 timeout 300 ./run.sh 2>&1 | tee ../boot.log
           grep -q ATUM-NET-OK ../boot.log
 
-      - name: Zip olustur ve yukle
+      - name: Zip olustur ve boyut kontrolu
         if: always()
+        env:
+          MAXZIP: ${{ inputs.max_zip_mb }}
         run: |
-          cd out && zip -9 ../alpine-atum-qemu.zip *
+          cd out && zip -9 ../alpine-atum-qemu.zip alpine-atum.img run.sh run.bat
+          cd .. && ls -l alpine-atum-qemu.zip
+          MB=$(( $(stat -c %s alpine-atum-qemu.zip) / 1048576 ))
+          echo "Zip boyutu: ${MB} MB (sinir ${MAXZIP} MB)"
+          [ "$MB" -le "$MAXZIP" ] || { echo "::error::Zip boyut siniri asildi"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
