@@ -1,0 +1,14 @@
+#!/bin/sh
+# Stage 3: shutdown
+exec 2>&1
+PATH=/command:/sbin:/bin:/usr/sbin:/usr/bin
+
+echo 'Waiting for services to stop...'
+heka -w196 force-stop /service/* 2>/dev/null
+heka exit /service/* 2>/dev/null
+
+echo 'Shutdown...'
+sync
+umount -a -r 2>/dev/null
+sync
+exit 0

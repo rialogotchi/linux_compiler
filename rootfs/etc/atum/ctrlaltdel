@@ -1,0 +1,5 @@
+#!/bin/sh
+PATH=/bin:/usr/bin
+touch /etc/atum/stopit
+chmod 100 /etc/atum/stopit
+sleep 2

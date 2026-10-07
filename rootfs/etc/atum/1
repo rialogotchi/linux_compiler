@@ -1,0 +1,29 @@
+#!/bin/sh
+# Stage 1: one-time system setup
+PATH=/command:/sbin:/bin:/usr/sbin:/usr/bin
+exec 2>&1
+
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm /run /tmp
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs tmpfs /dev/shm 2>/dev/null
+mount -t tmpfs tmpfs /run 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+chmod 1777 /tmp
+mount -o remount,rw / 2>/dev/null
+
+hostname -F /etc/hostname 2>/dev/null
+echo /sbin/mdev > /proc/sys/kernel/hotplug 2>/dev/null
+mdev -s 2>/dev/null
+ip link set lo up 2>/dev/null
+
+echo
+echo "Welcome to ATUM Linux"
+echo
+
+# stage 1 done: make sure stopit is not executable so stage 2 runs
+: > /etc/atum/stopit
+chmod 0 /etc/atum/stopit
+exit 0
