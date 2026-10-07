@@ -254,6 +254,9 @@ jobs:
           cleanup() { sudo umount "$MNT" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
           trap cleanup EXIT
           sudo mkfs.ext4 -F -L ATUMROOT "${LOOP}p1"
+          # No initramfs, so the kernel cannot resolve LABEL=; use the MBR disk id (PARTUUID) instead.
+          PTUUID=$(sudo blkid -s PTUUID -o value "$LOOP")
+          test -n "$PTUUID"
           sudo mkdir -p "$MNT"
           sudo mount "${LOOP}p1" "$MNT"
           sudo cp -a "$ROOTFS/." "$MNT/"
@@ -266,7 +269,8 @@ jobs:
           insmod part_msdos
           insmod ext2
           search --no-floppy --label ATUMROOT --set=root
-          linux /boot/vmlinuz-${KERNEL_VERSION} root=LABEL=ATUMROOT rootfstype=ext4 rw console=ttyS0,115200 console=tty0 net.ifnames=0 biosdevname=0
+          linux /boot/vmlinuz-${KERNEL_VERSION} root=PARTUUID=${PTUUID}-01 rootfstype=ext4 rw rootwait console=tty0 console=ttyS0,115200 net.ifnames=0 biosdevname=0
+          boot
           EOF
           sudo sync
           sudo umount "$MNT"
