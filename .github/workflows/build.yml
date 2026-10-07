@@ -66,6 +66,14 @@ jobs:
           make -j"$(nproc)"
           make install
           "$PREFIX/bin/musl-gcc" -dumpversion
+          # musl-gcc only sees musl's headers; BusyBox (loadfont, ip, mdev, ...) needs
+          # the Linux UAPI headers (linux/kd.h etc.). Expose the distro's copies.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends linux-libc-dev
+          for d in linux asm-generic mtd; do
+            if [ -d "/usr/include/$d" ]; then ln -sfn "/usr/include/$d" "$PREFIX/include/$d"; fi
+          done
+          ln -sfn /usr/include/x86_64-linux-gnu/asm "$PREFIX/include/asm"
+          test -f "$PREFIX/include/linux/kd.h"
 
       - name: Build BusyBox against musl
         run: |
