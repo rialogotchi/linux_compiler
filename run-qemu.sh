@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-IMG=${1:-dist/atum-musl-busybox-atum-opkg-x86_64.img}
+IMG=${1:-dist/atum-musl-busybox-atum-x86_64.img}
 exec qemu-system-x86_64 \
   -machine pc \
   -m 512M \

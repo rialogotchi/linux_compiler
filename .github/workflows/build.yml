@@ -1,4 +1,4 @@
-name: Build ATUM Linux (musl + BusyBox + ATUM + opkg)
+name: Build ATUM Linux (musl + BusyBox + ATUM)
 
 on:
   workflow_dispatch:
@@ -11,10 +11,6 @@ on:
         description: BusyBox version
         required: false
         default: '1.38.0'
-      opkg_version:
-        description: opkg version
-        required: false
-        default: '0.9.0'
       image_size:
         description: Raw image size
         required: false
@@ -29,7 +25,6 @@ jobs:
     env:
       KERNEL_VERSION: ${{ inputs.kernel_version || '6.12.112' }}
       BUSYBOX_VERSION: ${{ inputs.busybox_version || '1.38.0' }}
-      OPKG_VERSION: ${{ inputs.opkg_version || '0.9.0' }}
       IMAGE_SIZE: ${{ inputs.image_size || '512M' }}
       SRC: ${{ github.workspace }}/.src
       ROOTFS: ${{ github.workspace }}/rootfs-build
@@ -114,36 +109,10 @@ jobs:
           ln -sf /sbin/khepri "$ROOTFS/sbin/init"
           file "$ROOTFS/command/atum" "$ROOTFS/command/ennead" "$ROOTFS/command/nehebkau"
 
-      - name: Build opkg against musl
-        run: |
-          set -eux
-          cd "$SRC"
-          curl -fL --retry 5 -o opkg.tar.gz "https://mirrors.edge.kernel.org/yocto/opkg/opkg-${OPKG_VERSION}.tar.gz"
-          tar -xzf opkg.tar.gz
-          cd "opkg-${OPKG_VERSION}"
-          rm -rf build musl-build   # the release tarball ships a stale build/ with a foreign CMakeCache
-          cmake -S . -B musl-build \
-            -DCMAKE_C_COMPILER="$PREFIX/bin/musl-gcc" \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DCMAKE_INSTALL_SYSCONFDIR=/etc \
-            -DCMAKE_EXE_LINKER_FLAGS=-static \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DSTATIC_LIBOPKG=ON \
-            -DWITH_CURL=OFF \
-            -DWITH_GPGME=OFF \
-            -DWITH_LIBOPKG_API=OFF \
-            -DWITH_LZ4=OFF \
-            -DWITH_XZ=OFF \
-            -DWITH_ZSTD=OFF \
-            -DWITH_BZIP2=OFF \
-            -DUSE_SOLVER_INTERNAL=ON
-          cmake --build musl-build -j"$(nproc)"
-          DESTDIR="$ROOTFS" cmake --install musl-build
-
       - name: Install ATUM init tree, services and base filesystem
         run: |
           set -eux
-          mkdir -p "$ROOTFS"/{bin,sbin,usr/bin,usr/sbin,boot,dev,proc,sys,run,tmp,etc/atum,etc/service,etc/init.d,service,root,var/log,var/cache/opkg,var/lib/opkg/lists}
+          mkdir -p "$ROOTFS"/{bin,sbin,usr/bin,usr/sbin,boot,dev,proc,sys,run,tmp,etc/atum,etc/service,etc/init.d,service,root,var/log,etc/ssl/certs}
           cp -a rootfs/. "$ROOTFS/"
           ln -sf /bin/busybox "$ROOTFS/bin/sh"
           for x in mount umount switch_root ip udhcpc getty ps kill reboot poweroff halt \
@@ -157,13 +126,10 @@ jobs:
           printf '127.0.0.1 localhost\n127.0.1.1 atum\n::1 localhost ip6-localhost\n' > "$ROOTFS/etc/hosts"
           printf 'atum\n' > "$ROOTFS/etc/hostname"
           printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$ROOTFS/etc/resolv.conf"
-          cat > "$ROOTFS/etc/opkg/opkg.conf" <<'CONF'
-          arch all 100
-          arch x86_64 200
-          lists_dir ext /var/lib/opkg/lists
-          cache_dir /var/cache/opkg
-          CONF
-          : > "$ROOTFS/var/lib/opkg/status"
+          # CA bundle so wget/ssl_client can verify HTTPS servers
+          cp -L /etc/ssl/certs/ca-certificates.crt "$ROOTFS/etc/ssl/certs/ca-certificates.crt"
+          printf 'hosts: files dns\n' > "$ROOTFS/etc/nsswitch.conf"
+          printf 'http 80/tcp\nhttps 443/tcp\nftp 21/tcp\nssh 22/tcp\ntelnet 23/tcp\ndomain 53/udp\ndomain 53/tcp\nntp 123/udp\n' > "$ROOTFS/etc/services"
           chmod +x "$ROOTFS/etc/atum/1" "$ROOTFS/etc/atum/2" "$ROOTFS/etc/atum/3" \
             "$ROOTFS/etc/atum/ctrlaltdel" "$ROOTFS/etc/service/network/run" "$ROOTFS/etc/service/getty/run"
           ln -sf /etc/service/network "$ROOTFS/service/network"
@@ -225,6 +191,49 @@ jobs:
           scripts/config --enable CONFIG_USB_XHCI_HCD
           scripts/config --enable CONFIG_HID
           scripts/config --enable CONFIG_HID_GENERIC
+          scripts/config --enable CONFIG_PACKET
+          scripts/config --enable CONFIG_NET_CORE
+          scripts/config --enable CONFIG_INET_DIAG
+          scripts/config --enable CONFIG_IP_MULTICAST
+          scripts/config --enable CONFIG_IP_ADVANCED_ROUTER
+          scripts/config --enable CONFIG_IP_ROUTE_MULTIPATH
+          scripts/config --enable CONFIG_IP_PNP
+          scripts/config --enable CONFIG_TCP_CONG_BBR
+          scripts/config --enable CONFIG_NET_SCHED
+          scripts/config --enable CONFIG_NF_CONNTRACK
+          scripts/config --enable CONFIG_NF_TABLES
+          scripts/config --enable CONFIG_NETFILTER_ADVANCED
+          scripts/config --enable CONFIG_IP_NF_MANGLE
+          scripts/config --enable CONFIG_IP_NF_TARGET_MASQUERADE
+          scripts/config --enable CONFIG_NETFILTER_XT_MATCH_CONNTRACK
+          scripts/config --enable CONFIG_NETFILTER_XT_TARGET_MASQUERADE
+          scripts/config --enable CONFIG_BONDING
+          scripts/config --enable CONFIG_DUMMY
+          scripts/config --enable CONFIG_VETH
+          scripts/config --enable CONFIG_VXLAN
+          scripts/config --enable CONFIG_WIREGUARD
+          scripts/config --enable CONFIG_MACVLAN
+          scripts/config --enable CONFIG_TAP
+          scripts/config --enable CONFIG_IPV6_SIT
+          scripts/config --enable CONFIG_NET_IPIP
+          scripts/config --enable CONFIG_NET_IPGRE
+          scripts/config --enable CONFIG_PPP
+          scripts/config --enable CONFIG_PPPOE
+          scripts/config --enable CONFIG_VMXNET3
+          scripts/config --enable CONFIG_R8169
+          scripts/config --enable CONFIG_IGB
+          scripts/config --enable CONFIG_IXGBE
+          scripts/config --enable CONFIG_TG3
+          scripts/config --enable CONFIG_USB_NET_DRIVERS
+          scripts/config --enable CONFIG_USB_USBNET
+          scripts/config --enable CONFIG_USB_NET_CDCETHER
+          scripts/config --enable CONFIG_USB_RTL8152
+          scripts/config --enable CONFIG_WLAN
+          scripts/config --enable CONFIG_CFG80211
+          scripts/config --enable CONFIG_MAC80211
+          scripts/config --enable CONFIG_RFKILL
+          scripts/config --enable CONFIG_CRYPTO
+          scripts/config --enable CONFIG_CRYPTO_USER_API_HASH
           make olddefconfig
           make -j"$(nproc)" bzImage modules
           make INSTALL_MOD_PATH="$ROOTFS" modules_install
@@ -235,7 +244,7 @@ jobs:
       - name: Create bootable raw ext4 image
         run: |
           set -euxo pipefail
-          IMG="$OUT/atum-musl-busybox-atum-opkg-x86_64.img"
+          IMG="$OUT/atum-musl-busybox-atum-x86_64.img"
           truncate -s "$IMAGE_SIZE" "$IMG"
           parted -s "$IMG" mklabel msdos
           parted -s "$IMG" mkpart primary ext4 1MiB 100%
@@ -274,7 +283,7 @@ jobs:
             -m 512M \
             -nographic \
             -serial mon:stdio \
-            -drive file="$OUT/atum-musl-busybox-atum-opkg-x86_64.img",format=raw,if=virtio \
+            -drive file="$OUT/atum-musl-busybox-atum-x86_64.img",format=raw,if=virtio \
             -netdev user,id=n0 \
             -device virtio-net-pci,netdev=n0 \
             2>&1 | tee "$OUT/qemu-smoke.log" || true
@@ -284,7 +293,7 @@ jobs:
         run: |
           set -eux
           cp "$ROOTFS/boot/vmlinuz-${KERNEL_VERSION}" "$OUT/"
-          tar -C "$ROOTFS" -czf "$OUT/rootfs-musl-busybox-atum-opkg-x86_64.tar.gz" .
+          tar -C "$ROOTFS" -czf "$OUT/rootfs-musl-busybox-atum-x86_64.tar.gz" .
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
