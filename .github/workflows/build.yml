@@ -121,7 +121,8 @@ jobs:
           curl -fL --retry 5 -o opkg.tar.gz "https://mirrors.edge.kernel.org/yocto/opkg/opkg-${OPKG_VERSION}.tar.gz"
           tar -xzf opkg.tar.gz
           cd "opkg-${OPKG_VERSION}"
-          cmake -S . -B build \
+          rm -rf build musl-build   # the release tarball ships a stale build/ with a foreign CMakeCache
+          cmake -S . -B musl-build \
             -DCMAKE_C_COMPILER="$PREFIX/bin/musl-gcc" \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_SYSCONFDIR=/etc \
@@ -136,8 +137,8 @@ jobs:
             -DWITH_ZSTD=OFF \
             -DWITH_BZIP2=OFF \
             -DUSE_SOLVER_INTERNAL=ON
-          cmake --build build -j"$(nproc)"
-          DESTDIR="$ROOTFS" cmake --install build
+          cmake --build musl-build -j"$(nproc)"
+          DESTDIR="$ROOTFS" cmake --install musl-build
 
       - name: Install ATUM init tree, services and base filesystem
         run: |
