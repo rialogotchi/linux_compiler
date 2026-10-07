@@ -101,8 +101,8 @@ jobs:
           set -eux
           cd "$GITHUB_WORKSPACE/vendor/atum/src"
           # ATUM uses its small djb-style build helpers. Configure them for the musl toolchain.
-          printf '%s\n' "exec $PREFIX/bin/musl-gcc -O2 -Wall -static" > conf-cc
-          printf '%s\n' "exec $PREFIX/bin/musl-gcc -static" > conf-ld
+          printf '%s\n' "$PREFIX/bin/musl-gcc -O2 -Wall -static" > conf-cc
+          printf '%s\n' "$PREFIX/bin/musl-gcc -static" > conf-ld
           cd ..
           sh package/compile
           mkdir -p "$ROOTFS/command" "$ROOTFS/sbin"
